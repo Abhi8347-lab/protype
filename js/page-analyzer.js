@@ -8,6 +8,10 @@
   const Chart = window.SkillPathChart;
   const { escapeHtml } = Nav;
 
+  if (window.__skillSyncGateBlocked || !Nav.requireDiagnosticComplete()) {
+    return;
+  }
+
   let appState = await Storage.initState();
   let chartMode = null;
 

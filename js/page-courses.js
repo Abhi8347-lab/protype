@@ -7,6 +7,10 @@
   const Nav = window.SkillPathNav;
   const { escapeHtml } = Nav;
 
+  if (window.__skillSyncGateBlocked || !Nav.requireDiagnosticComplete()) {
+    return;
+  }
+
   let appState = await Storage.initState();
   let viewFilter = "gap";
   let platformFilter = "all";

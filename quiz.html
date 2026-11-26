@@ -16,24 +16,30 @@
             <div class="hero-badge">Diagnostic Skill Verification</div>
             <span class="ai-source-pill" id="quiz-mode-pill">Offline Question Bank Ready</span>
           </div>
-          <h1>Verify Your Skills with 5-Question Diagnostics</h1>
+          <h1>Verify Your Skills — Mandatory Diagnostic Gate</h1>
           <p class="page-lead">
-            3 Easy + 2 Hard questions per skill. Verified levels (Beginner 30% · Intermediate 60% · Expert 90%)
-            automatically re-calculate your skill gap and 6-week plan.
+            Complete the diagnostic test for <strong>every selected skill</strong> to unlock the
+            Skill-Gap Analyzer, Courses, and your 6-Week Plan.
+            3 Easy + 2 Hard questions per skill · 60 seconds per question.
           </p>
         </div>
-        <div class="header-cta-group">
+        <div class="header-cta-group" id="quiz-header-cta">
           <a href="index.html" class="btn-secondary">← Back to Profile</a>
-          <a href="analyzer.html" class="btn-primary">View Skill Gap &amp; Plan →</a>
+          <a href="analyzer.html" id="quiz-top-continue-btn" class="btn-primary" hidden>
+            Continue to Skill-Gap Analysis →
+          </a>
         </div>
       </section>
 
-      <!-- Skill Selector Queue -->
+      <!-- Gate Overall Progress -->
+      <section class="card gate-progress-card" id="gate-overall-progress" aria-label="Diagnostic Gate Progress"></section>
+
+      <!-- Skill Checklist Queue -->
       <section class="card quiz-queue-card" aria-label="Skills to Verify">
         <div class="card-header-row">
           <div>
-            <h2>Your Selected &amp; Role Skills</h2>
-            <p class="card-sub">Select a skill to start or retake its 5-question diagnostic test.</p>
+            <h2>Your Selected Skills — Required Tests</h2>
+            <p class="card-sub">🔒 = Required for gate. Click a skill to start or switch tests.</p>
           </div>
           <label class="toggle-switch-label" title="Attempt fresh AI questions when GEMINI_API_KEY is configured; silently falls back to offline bank">
             <input type="checkbox" id="toggle-ai-quiz-mode" />

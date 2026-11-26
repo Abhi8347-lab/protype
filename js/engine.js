@@ -773,6 +773,25 @@ window.SkillPathEngine = (function () {
 
       const spend = buildCourseSpendForProgress(emp.courseProgress);
 
+      const reqSkills = Object.keys(emp.selfScores || {});
+      const gateReq = reqSkills.length
+        ? reqSkills
+        : (data.ROLE_MAP[emp.targetRole]?.skills || []).map((s) => s.skillId);
+      const gateDone = gateReq.filter((sid) => Boolean(mergedVerified[sid]));
+      const gateClearedEmp =
+        gateReq.length > 0 && gateDone.length >= gateReq.length;
+      const gateStatus = gateClearedEmp
+        ? "cleared"
+        : gateDone.length > 0
+          ? "in_progress"
+          : "not_started";
+      const gateStatusLabel =
+        gateStatus === "cleared"
+          ? "Cleared"
+          : gateStatus === "in_progress"
+            ? "In progress"
+            : "Not started";
+
       return {
         id: emp.id,
         name: emp.name,
@@ -788,6 +807,11 @@ window.SkillPathEngine = (function () {
         completionPct,
         lastTestDate,
         status,
+        gateStatus,
+        gateStatusLabel,
+        gateVerifiedCount: gateDone.length,
+        gateRequiredCount: gateReq.length,
+        gateCleared: gateClearedEmp,
         analysis,
         courseProgress: emp.courseProgress || {},
         replanHistory: emp.replanHistory || [],
@@ -837,6 +861,54 @@ window.SkillPathEngine = (function () {
       Object.values(currentVerified).filter((v) => v.level !== "Beginner")
         .length + (currentAnalysis ? currentAnalysis.completedGapSkills.length : 0);
 
+    // Compute current user's true employee gate status (ignoring Manager/HR viewer role)
+    let userGateInfo;
+    if (activeState.profile) {
+      userGateInfo = getGateStatus(activeState, { ignoreRoleBypass: true });
+      if (
+        userGateInfo.required.length === 0 &&
+        Array.isArray(activeProfile.selectedSkills) &&
+        activeProfile.selectedSkills.length > 0
+      ) {
+        const req = activeProfile.selectedSkills.slice();
+        const done = req.filter((sid) => Boolean(currentVerified[sid]));
+        userGateInfo = {
+          status:
+            done.length >= req.length
+              ? "cleared"
+              : done.length > 0
+                ? "in_progress"
+                : "not_started",
+          required: req,
+          completed: done,
+          pending: req.filter((sid) => !done.includes(sid)),
+        };
+      }
+    } else {
+      const req = Array.isArray(activeProfile.selectedSkills)
+        ? activeProfile.selectedSkills.slice()
+        : [];
+      const done = req.filter((sid) => Boolean(currentVerified[sid]));
+      userGateInfo = {
+        status:
+          req.length > 0 && done.length >= req.length
+            ? "cleared"
+            : done.length > 0
+              ? "in_progress"
+              : "not_started",
+        required: req,
+        completed: done,
+        pending: req.filter((sid) => !done.includes(sid)),
+      };
+    }
+
+    const userGateLabel =
+      userGateInfo.status === "cleared"
+        ? "Cleared"
+        : userGateInfo.status === "in_progress"
+          ? "In progress"
+          : "Not started";
+
     records.unshift({
       id: currentEmpId,
       name: activeProfile.name || "Current Employee",
@@ -854,6 +926,11 @@ window.SkillPathEngine = (function () {
       completionPct: userCompletionPct,
       lastTestDate: userLastDate,
       status: userStatus,
+      gateStatus: userGateInfo.status,
+      gateStatusLabel: userGateLabel,
+      gateVerifiedCount: userGateInfo.completed.length,
+      gateRequiredCount: userGateInfo.required.length,
+      gateCleared: userGateInfo.status === "cleared",
       analysis: currentAnalysis,
       courseProgress: currentProgress,
       replanHistory: (activeState.replanHistory || []).filter(
@@ -864,6 +941,90 @@ window.SkillPathEngine = (function () {
     });
 
     return records;
+  }
+
+  /**
+   * Gate check: returns true only if the employee role has completed all required
+   * diagnostic tests. Manager/HR roles always bypass the gate.
+   * @param {object} state - The full app state from localStorage.
+   * @returns {boolean}
+   */
+  function isGateCleared(state) {
+    if (!state) return false;
+    const role = state.activeRole || "employee";
+    if (role === "manager" || role === "hr") return true;
+
+    const gate = state.gate;
+    if (!gate) return false;
+
+    const required = Array.isArray(gate.required) ? gate.required : [];
+    const completed = Array.isArray(gate.completed) ? gate.completed : [];
+
+    if (required.length === 0) {
+      return Boolean(
+        gate.cleared === true &&
+          state.profile &&
+          Array.isArray(state.profile.selectedSkills) &&
+          state.profile.selectedSkills.length === 0
+      );
+    }
+    return required.every((s) => completed.includes(s));
+  }
+
+  /**
+   * Returns a detailed gate status object for the user.
+   * @param {object} state
+   * @param {object} [options]
+   * @param {boolean} [options.ignoreRoleBypass] - Evaluate underlying employee gate status even when viewing as Manager/HR.
+   */
+  function getGateStatus(state, options) {
+    if (!state) {
+      return {
+        status: "not_started",
+        required: [],
+        completed: [],
+        pending: [],
+        clearedAt: null,
+      };
+    }
+    const role = state.activeRole || "employee";
+    if (!options?.ignoreRoleBypass && (role === "manager" || role === "hr")) {
+      return {
+        status: "cleared",
+        required: [],
+        completed: [],
+        pending: [],
+        clearedAt: null,
+        bypassed: true,
+      };
+    }
+    const gate = state.gate || {};
+    const required = Array.isArray(gate.required) ? gate.required : [];
+    const completed = Array.isArray(gate.completed) ? gate.completed : [];
+    const validCompleted = completed.filter((s) => required.includes(s));
+    const pending = required.filter((s) => !validCompleted.includes(s));
+    const isZeroSkillCleared =
+      required.length === 0 &&
+      Boolean(
+        gate.cleared === true &&
+          state.profile &&
+          Array.isArray(state.profile.selectedSkills) &&
+          state.profile.selectedSkills.length === 0
+      );
+    const isCleared =
+      (required.length > 0 && pending.length === 0) || isZeroSkillCleared;
+    let status = "not_started";
+    if (isCleared) status = "cleared";
+    else if (validCompleted.length > 0 || (state.inProgress && state.inProgress.skill)) {
+      status = "in_progress";
+    }
+    return {
+      status,
+      required,
+      completed: validCompleted,
+      pending,
+      clearedAt: gate.clearedAt || null,
+    };
   }
 
   /**
@@ -931,5 +1092,7 @@ window.SkillPathEngine = (function () {
     getSlotsPerWeek,
     getActivePriorities,
     resolveInitialPct,
+    isGateCleared,
+    getGateStatus,
   };
 })();

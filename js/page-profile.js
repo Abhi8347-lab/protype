@@ -4,6 +4,7 @@
 (async function () {
   const Data = window.SkillPathData;
   const Storage = window.SkillPathStorage;
+  const Engine = window.SkillPathEngine;
   const Nav = window.SkillPathNav;
   const { escapeHtml } = Nav;
 
@@ -53,7 +54,6 @@
   const loadDemoBtn = document.getElementById("btn-load-demo-employee");
   const demoGoGapBtn = document.getElementById("btn-demo-go-gap");
   const verifySkillsTopBtn = document.getElementById("btn-verify-skills-top");
-  const saveAndVerifyBtn = document.getElementById("btn-save-and-verify");
 
   const nameInput = document.getElementById("input-name");
   const statusOptionsEl = document.getElementById("status-options");
@@ -304,9 +304,24 @@
           draft.skillRatings[skillId] ||
           Math.max(1, Math.min(5, Math.round(scorePct / 20)));
         const ver = verifiedMap[skillId];
+        const gateCleared = Engine.isGateCleared(appState);
+        const gateCompleted = Array.isArray(appState.gate?.completed)
+          ? appState.gate.completed
+          : [];
+        const isSkillDoneInGate = gateCompleted.includes(skillId);
         const verBadge = ver
           ? `<span class="ver-mini-pill level-${ver.level.toLowerCase()}">Verified ${escapeHtml(ver.level)} (${ver.verifiedPct}%)</span>`
-          : `<span class="ver-mini-pill level-unverified">Unverified</span>`;
+          : `<span class="ver-mini-pill level-unverified">Pending diagnostic</span>`;
+
+        const diagControlHtml =
+          isSkillDoneInGate && !gateCleared
+            ? `<span class="gate-status-pill gate-completed" title="Complete all remaining skills first to unlock retakes">✓ Tested</span>`
+            : `<button
+                type="button"
+                class="btn-ghost-sm btn-diagnostic-inline"
+                data-take-quiz="${escapeHtml(skillId)}"
+                title="Run 5-question diagnostic test for ${escapeHtml(skill.name)}"
+              >${ver && gateCleared ? "Retake test" : "Take diagnostic test"}</button>`;
 
         const starsHtml = [1, 2, 3, 4, 5]
           .map(
@@ -334,12 +349,7 @@
               <div class="star-group" role="group" aria-label="Rating for ${escapeHtml(skill.name)}">
                 ${starsHtml}
               </div>
-              <button
-                type="button"
-                class="btn-ghost-sm btn-diagnostic-inline"
-                data-take-quiz="${escapeHtml(skillId)}"
-                title="Run 5-question diagnostic test for ${escapeHtml(skill.name)}"
-              >${ver ? "Retake test" : "Take diagnostic test"}</button>
+              ${diagControlHtml}
               <button
                 type="button"
                 class="rating-remove-btn"
@@ -445,14 +455,14 @@
 
     summaryPreviewEl.innerHTML = `
       <div class="summary-preview-top">
-        <div class="summary-preview-badge">Ready for AI Skill Gap &amp; 6-Week Plan</div>
+        <div class="summary-preview-badge">Next: Complete Skill Diagnostic (${draft.selectedSkills.length} test${draft.selectedSkills.length === 1 ? "" : "s"})</div>
         ${demoNote}
       </div>
       <p>
         <strong>${escapeHtml(displayName)}</strong> (${escapeHtml(draft.backgroundDetail)})
         → targeting <strong>${escapeHtml(role.name)}</strong> · Priority:
         <strong>${escapeHtml(draft.companyPriority)}</strong> ·
-        <strong>${draft.selectedSkills.length}</strong> scored skill${draft.selectedSkills.length === 1 ? "" : "s"} ·
+        <strong>${draft.selectedSkills.length}</strong> selected skill${draft.selectedSkills.length === 1 ? "" : "s"} ·
         <strong>${escapeHtml(exp ? exp.label : "")}</strong> ·
         <strong>${draft.learningSlotsPerWeek} learning slots/week</strong>.
       </p>
@@ -508,11 +518,8 @@
     });
 
     btnPrev.hidden = currentStep === 1;
-    if (saveAndVerifyBtn) {
-      saveAndVerifyBtn.hidden = currentStep !== TOTAL_STEPS;
-    }
     btnNext.textContent =
-      currentStep === TOTAL_STEPS ? "Next: Analyze Skill Gap →" : "Next →";
+      currentStep === TOTAL_STEPS ? "Save & Start Diagnostic →" : "Next →";
 
     if (currentStep === 3) {
       renderSkillCategoryFilters();
@@ -553,14 +560,40 @@
   }
 
   async function submitProfile() {
-    if (!validateStep(1) || !validateStep(2) || !validateStep(4)) {
+    if (!validateStep(1)) {
+      goToStep(1);
+      validateStep(1);
+      return;
+    }
+    if (!validateStep(2)) {
+      goToStep(2);
+      validateStep(2);
+      return;
+    }
+    if (!validateStep(4)) {
       return;
     }
 
     btnNext.disabled = true;
-    btnNext.textContent = "Analyzing...";
-    await Storage.saveProfile(buildCleanProfile());
-    window.location.href = "analyzer.html";
+    btnNext.textContent = "Saving...";
+    const cleanProfile = buildCleanProfile();
+    await Storage.saveProfile(cleanProfile);
+    // Always redirect to quiz for mandatory diagnostic gate
+    window.location.href = "quiz.html";
+  }
+
+  function syncDemoBannerButtons(state) {
+    const hasProfile = Boolean(state && state.profile);
+    const gateCleared = Boolean(state && Engine.isGateCleared(state));
+    if (verifySkillsTopBtn) {
+      verifySkillsTopBtn.hidden = !hasProfile;
+      verifySkillsTopBtn.textContent = gateCleared
+        ? "✓ Review / Retake Diagnostics"
+        : "Start Diagnostic Tests →";
+    }
+    if (demoGoGapBtn) {
+      demoGoGapBtn.hidden = !(hasProfile && gateCleared);
+    }
   }
 
   function renderAllWizardSections() {
@@ -586,33 +619,18 @@
 
     renderAllWizardSections();
     goToStep(4);
+    syncDemoBannerButtons(appState);
 
-    if (demoGoGapBtn) {
-      demoGoGapBtn.hidden = false;
-    }
-    if (verifySkillsTopBtn) {
-      verifySkillsTopBtn.hidden = false;
-    }
     Nav.render({
       activePage: "profile",
       state: appState,
       onReset: () => window.location.reload(),
     });
     Nav.showToast(
-      "Loaded Demo Employee: Junior Data Analyst (SQL 80%, Power BI 40%, Statistics 55%)",
+      "Loaded Demo Employee — click 'Save & Start Diagnostic' to begin skill tests.",
       "success"
     );
   });
-
-  if (saveAndVerifyBtn) {
-    saveAndVerifyBtn.addEventListener("click", async () => {
-      if (!validateStep(1) || !validateStep(2) || !validateStep(4)) {
-        return;
-      }
-      await Storage.saveProfile(buildCleanProfile());
-      window.location.href = "quiz.html";
-    });
-  }
 
   // Bind inputs & events
   nameInput.addEventListener("input", (e) => {
@@ -684,11 +702,17 @@
     activePage: "profile",
     state: appState,
     onReset: () => window.location.reload(),
+    onRoleChange: (_role, nextState) => {
+      appState = nextState;
+      syncDemoBannerButtons(appState);
+      Nav.render({
+        activePage: "profile",
+        state: appState,
+        onReset: () => window.location.reload(),
+      });
+    },
   });
-  if (appState.profile) {
-    if (demoGoGapBtn) demoGoGapBtn.hidden = false;
-    if (verifySkillsTopBtn) verifySkillsTopBtn.hidden = false;
-  }
+  syncDemoBannerButtons(appState);
   renderAllWizardSections();
   goToStep(1);
 })();

@@ -1,8 +1,14 @@
 /**
  * Shared navigation bar, role switcher (Employee / Manager / HR),
  * notifications bell, dark mode toggle, page stepper, and toast utilities.
+ *
+ * Gate guard: requireDiagnosticComplete() blocks locked pages for Employees
+ * who haven't completed all required skill tests.
  */
 window.SkillPathNav = (function () {
+  const FLASH_TOAST_KEY = "skillsync_flash_toast";
+  let pageshowGuardBound = false;
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -42,7 +48,32 @@ window.SkillPathNav = (function () {
     window.setTimeout(() => {
       toast.classList.remove("is-visible");
       window.setTimeout(() => toast.remove(), 250);
-    }, 3000);
+    }, 3400);
+  }
+
+  function setFlashToast(message, tone = "warning") {
+    try {
+      window.sessionStorage.setItem(
+        FLASH_TOAST_KEY,
+        JSON.stringify({ message, tone })
+      );
+    } catch (_err) {
+      // Ignore storage errors in restricted environments.
+    }
+  }
+
+  function consumeFlashToast() {
+    try {
+      const raw = window.sessionStorage.getItem(FLASH_TOAST_KEY);
+      if (!raw) return;
+      window.sessionStorage.removeItem(FLASH_TOAST_KEY);
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.message) {
+        showToast(parsed.message, parsed.tone || "info");
+      }
+    } catch (_err) {
+      // Ignore parse/storage errors.
+    }
   }
 
   function getSampleProfile() {
@@ -51,28 +82,68 @@ window.SkillPathNav = (function () {
     );
   }
 
+  /**
+   * Gate guard function. Call on every locked page (analyzer.html, courses.html, etc.).
+   * Redirects to quiz.html with toast "Please complete your diagnostic test first"
+   * when an Employee has not cleared the diagnostic gate.
+   * Also guards Back/Forward navigation via `pageshow`.
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.silent] - Skip setting flash toast if true.
+   * @returns {boolean} true if access is allowed, false if blocked & redirecting.
+   */
+  function requireDiagnosticComplete(opts) {
+    const Storage = window.SkillPathStorage;
+    const Engine = window.SkillPathEngine;
+    if (!Storage || !Engine) return true;
+
+    function check(showMessage) {
+      const state = Storage.readLocal();
+      if (Engine.isGateCleared(state)) {
+        return true;
+      }
+      if (showMessage) {
+        setFlashToast("Please complete your diagnostic test first", "warning");
+        showToast("Please complete your diagnostic test first", "warning");
+      }
+      window.location.replace("quiz.html");
+      return false;
+    }
+
+    if (!pageshowGuardBound) {
+      pageshowGuardBound = true;
+      window.addEventListener("pageshow", () => {
+        check(true);
+      });
+    }
+
+    return check(opts?.silent !== true);
+  }
+
   function render({ activePage, state, onReset, onRoleChange }) {
     const currentTheme = applyStoredTheme();
+    consumeFlashToast();
     const mount = document.getElementById("app-navbar");
     if (!mount) return;
 
     const Storage = window.SkillPathStorage;
+    const Engine = window.SkillPathEngine;
     const currentState = state || (Storage ? Storage.readLocal() : {});
     const activeRole = currentState.activeRole || "employee";
     const profile = currentState.profile || null;
     const analysis =
-      profile && window.SkillPathEngine
-        ? window.SkillPathEngine.analyzeProfile(
+      profile && Engine
+        ? Engine.analyzeProfile(
             profile,
             currentState.courseProgress,
             currentState
           )
         : null;
 
-    const empId = currentState.currentEmployeeId || "emp_current";
-    const verifiedCount = Object.keys(
-      currentState.verifiedLevels?.[empId] || {}
-    ).length;
+    // Gate state
+    const gateCleared = Engine ? Engine.isGateCleared(currentState) : false;
+    const isManagerOrHr = activeRole === "manager" || activeRole === "hr";
+    const lockedByGate = !gateCleared && !isManagerOrHr;
 
     const steps = [
       {
@@ -81,13 +152,15 @@ window.SkillPathNav = (function () {
         label: "Profile Setup",
         href: "index.html",
         done: Boolean(profile),
+        locked: false,
       },
       {
         id: "quiz",
         num: "✓",
         label: "Skill Quiz",
         href: "quiz.html",
-        done: verifiedCount > 0,
+        done: gateCleared && !isManagerOrHr,
+        locked: false,
       },
       {
         id: "analyzer",
@@ -95,6 +168,7 @@ window.SkillPathNav = (function () {
         label: "Skill Gap & Plan",
         href: "analyzer.html",
         done: Boolean(analysis && analysis.roadmapProgressPct === 100),
+        locked: lockedByGate,
       },
       {
         id: "courses",
@@ -106,16 +180,18 @@ window.SkillPathNav = (function () {
             analysis.overallCoursePct === 100 &&
             analysis.totalGapCourses > 0
         ),
+        locked: lockedByGate,
       },
     ];
 
-    if (activeRole === "manager" || activeRole === "hr") {
+    if (isManagerOrHr) {
       steps.push({
         id: "dashboard",
         num: activeRole === "hr" ? "HR" : "M",
         label: activeRole === "hr" ? "HR Dashboard" : "Manager Dashboard",
         href: "dashboard.html",
         done: false,
+        locked: false,
       });
     }
 
@@ -178,7 +254,7 @@ window.SkillPathNav = (function () {
                       (n) => `
                   <div class="notif-item ${n.read ? "is-read" : "is-unread"}">
                     <div class="notif-item-top">
-                      <span class="notif-type-tag">${escapeHtml(n.type === "retest_requested" ? "Retest Request" : "Manager/HR Nudge")}</span>
+                      <span class="notif-type-tag">${escapeHtml(n.type === "retest_requested" ? "Retest Request" : n.type === "diagnostic_nudge" ? "Diagnostic Nudge" : "Manager/HR Nudge")}</span>
                       <span class="notif-time">${escapeHtml((n.createdAt || "").slice(0, 10))}</span>
                     </div>
                     <p>${escapeHtml(n.message)}</p>
@@ -230,20 +306,31 @@ window.SkillPathNav = (function () {
                 "stepper-link",
                 isActive ? "is-active" : "",
                 step.done ? "is-done" : "",
+                step.locked ? "is-locked" : "",
               ]
                 .filter(Boolean)
                 .join(" ");
-              const badgeContent =
-                step.done && !isActive ? "✓" : String(step.num);
+              const badgeContent = step.locked
+                ? "🔒"
+                : step.done && !isActive
+                  ? "✓"
+                  : String(step.num);
               const connector =
                 idx < steps.length - 1
                   ? `<span class="stepper-arrow" aria-hidden="true">→</span>`
                   : "";
+              const lockTitle = step.locked
+                ? 'title="Complete your diagnostic test to unlock"'
+                : "";
+              const linkTag = step.locked
+                ? `<span class="${cls}" aria-disabled="true" ${lockTitle}>`
+                : `<a href="${step.href}" class="${cls}" ${isActive ? 'aria-current="page"' : ""}>`;
+              const closeTag = step.locked ? `</span>` : `</a>`;
               return `
-                <a href="${step.href}" class="${cls}" ${isActive ? 'aria-current="page"' : ""}>
+                ${linkTag}
                   <span class="stepper-num">${badgeContent}</span>
                   <span class="stepper-label">${escapeHtml(step.label)}</span>
-                </a>
+                ${closeTag}
                 ${connector}
               `;
             })
@@ -267,9 +354,13 @@ window.SkillPathNav = (function () {
 
         if (nextRole === "employee") {
           if (activePage === "dashboard") {
-            window.location.href = nextState.profile
-              ? "analyzer.html"
-              : "index.html";
+            if (nextState.profile && Engine.isGateCleared(nextState)) {
+              window.location.href = "analyzer.html";
+            } else if (nextState.profile) {
+              window.location.href = "quiz.html";
+            } else {
+              window.location.href = "index.html";
+            }
             return;
           }
         } else if (activePage !== "dashboard") {
@@ -348,7 +439,10 @@ window.SkillPathNav = (function () {
     escapeHtml,
     applyStoredTheme,
     showToast,
+    setFlashToast,
+    consumeFlashToast,
     getSampleProfile,
     render,
+    requireDiagnosticComplete,
   };
 })();

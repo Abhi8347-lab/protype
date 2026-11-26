@@ -379,7 +379,9 @@
     const msg =
       actionType === "retest_requested"
         ? `${senderLabel} requested a diagnostic skill retest for ${emp.displayName}.`
-        : `${senderLabel} sent a progress nudge to ${emp.displayName} (${emp.completionPct}% complete · ${emp.status}).`;
+        : actionType === "diagnostic_nudge"
+          ? `${senderLabel} nudged ${emp.displayName} to complete pending diagnostic tests (${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0} verified).`
+          : `${senderLabel} sent a progress nudge to ${emp.displayName} (${emp.completionPct}% complete · ${emp.status}).`;
 
     appState = await Storage.addNudge({
       employeeId: emp.id,
@@ -398,6 +400,21 @@
     Nav.showToast(msg, "success");
   }
 
+  function renderGateBadgeHtml(emp) {
+    const gateInfo = emp.gateStatus || "not_started";
+    const gateVerified = Number(emp.gateVerifiedCount || 0);
+    const gateRequired = Number(emp.gateRequiredCount || 0);
+
+    if (gateInfo === "cleared") {
+      return `<span class="gate-badge gate-badge-cleared">✓ Cleared (${gateVerified}/${gateRequired})</span>`;
+    }
+    const statusPill =
+      gateInfo === "in_progress"
+        ? `<span class="gate-badge gate-badge-progress">▶ In progress (${gateVerified}/${gateRequired})</span>`
+        : `<span class="gate-badge gate-badge-not-started">○ Not started (${gateVerified}/${gateRequired})</span>`;
+    return `<div class="gate-status-wrap">${statusPill}<span class="gate-badge gate-badge-pending">Diagnostic pending</span></div>`;
+  }
+
   function renderPerformanceTable(filteredEmployees) {
     const columns = [
       { id: "name", label: "Employee" },
@@ -406,6 +423,7 @@
       { id: "avgLevel", label: "Avg Level" },
       { id: "completionPct", label: "Completion %" },
       { id: "lastTestDate", label: "Last Test Date" },
+      { id: "gateStatus", label: "Diagnostic Gate" },
       { id: "status", label: "Status" },
     ];
 
@@ -423,11 +441,14 @@
 
     const tbody =
       filteredEmployees.length === 0
-        ? `<tr><td colspan="8" class="table-empty-cell">No employees match the current filters.</td></tr>`
+        ? `<tr><td colspan="9" class="table-empty-cell">No employees match the current filters.</td></tr>`
         : filteredEmployees
             .map((emp) => {
               const statusSlug = emp.status.toLowerCase().replace(/\s+/g, "-");
               const isSelected = emp.id === selectedEmployeeId;
+              const gateInfo = emp.gateStatus || "not_started";
+              const gateTag = renderGateBadgeHtml(emp);
+
               return `
                 <tr class="perf-row ${isSelected ? "is-selected-row" : ""}" data-row-emp="${escapeHtml(emp.id)}">
                   <td>
@@ -436,14 +457,18 @@
                     </button>
                   </td>
                   <td>${escapeHtml(emp.roleName)}</td>
-                  <td><strong>${emp.verifiedCount}</strong></td>
+                  <td><strong>${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0}</strong> <span class="muted-note">(${emp.verifiedCount} total)</span></td>
                   <td><span class="ver-mini-pill level-${emp.avgLevel.toLowerCase()}">${escapeHtml(emp.avgLevel)}</span></td>
                   <td><strong>${emp.completionPct}%</strong></td>
                   <td>${escapeHtml(emp.lastTestDate)}</td>
+                  <td>${gateTag}</td>
                   <td><span class="emp-status-pill status-${statusSlug}">${escapeHtml(emp.status)}</span></td>
                   <td class="table-actions-cell">
                     <button type="button" class="btn-xs" data-nudge-emp="${escapeHtml(emp.id)}">Nudge</button>
                     <button type="button" class="btn-xs btn-xs-outline" data-retest-emp="${escapeHtml(emp.id)}">Request retest</button>
+                    ${gateInfo !== "cleared"
+                      ? `<button type="button" class="btn-xs btn-xs-warn" data-nudge-diagnostic="${escapeHtml(emp.id)}">Nudge to complete test</button>`
+                      : ""}
                   </td>
                 </tr>
               `;
@@ -506,6 +531,14 @@
         if (emp) triggerAction(emp, "retest_requested");
       });
     });
+
+    mount.querySelectorAll("[data-nudge-diagnostic]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const eid = btn.getAttribute("data-nudge-diagnostic");
+        const emp = filteredEmployees.find((x) => x.id === eid);
+        if (emp) triggerAction(emp, "diagnostic_nudge");
+      });
+    });
   }
 
   function renderDetailPanel(employees) {
@@ -520,17 +553,31 @@
     selectedEmployeeId = emp.id;
     detailCard.hidden = false;
 
+    const gateLabel = emp.gateStatusLabel || "Not started";
     document.getElementById("detail-team-badge").textContent =
-      `${emp.team} · ${emp.status}`;
+      `${emp.team} · ${emp.status} · Gate: ${gateLabel}`;
     document.getElementById("detail-emp-name").textContent = emp.displayName;
-    document.getElementById("detail-emp-meta").textContent =
-      `${emp.roleName} · ${emp.verifiedCount} verified skill(s) · ${emp.completionPct}% course completion`;
+    document.getElementById("detail-emp-meta").innerHTML = `
+      <span>${escapeHtml(emp.roleName)} · ${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0} required skills verified · ${emp.completionPct}% course completion</span>
+      ${renderGateBadgeHtml(emp)}
+    `;
 
     const actionsMount = document.getElementById("detail-actions-mount");
     actionsMount.innerHTML = `
+      ${
+        emp.gateStatus !== "cleared"
+          ? `<button type="button" class="btn-secondary btn-xs-warn" id="detail-nudge-diag-btn">Nudge to complete test</button>`
+          : ""
+      }
       <button type="button" class="btn-secondary" id="detail-nudge-btn">Send Nudge</button>
       <button type="button" class="btn-primary" id="detail-retest-btn">Request Retest</button>
     `;
+    const diagBtn = document.getElementById("detail-nudge-diag-btn");
+    if (diagBtn) {
+      diagBtn.addEventListener("click", () =>
+        triggerAction(emp, "diagnostic_nudge")
+      );
+    }
     document
       .getElementById("detail-nudge-btn")
       .addEventListener("click", () => triggerAction(emp, "nudge"));
@@ -562,7 +609,7 @@
       flatAttempts
     );
 
-    // Per-skill test history
+    // Per-skill test history (including tab-switch count)
     const historyMount = document.getElementById("detail-test-history");
     if (flatAttempts.length === 0) {
       historyMount.innerHTML = `<p class="muted-note">No diagnostic test history yet.</p>`;
@@ -570,22 +617,31 @@
       historyMount.innerHTML = `
         <table class="data-table compact-table">
           <thead>
-            <tr><th>Skill</th><th>Date</th><th>Score</th><th>Level</th></tr>
+            <tr><th>Skill</th><th>Date</th><th>Score</th><th>Level</th><th>Tab Switches</th></tr>
           </thead>
           <tbody>
             ${flatAttempts
               .slice()
               .reverse()
-              .map(
-                (att) => `
+              .map((att) => {
+                const switches =
+                  att.tabSwitchCount != null ? Number(att.tabSwitchCount) : null;
+                const switchCell =
+                  switches === null
+                    ? `<span class="muted-note">—</span>`
+                    : switches > 0
+                      ? `<span class="tab-switch-flag" title="Tab focus lost during attempt">⚠ ${switches}</span>`
+                      : `<span>0</span>`;
+                return `
               <tr>
                 <td><strong>${escapeHtml(att.skillName)}</strong></td>
                 <td>${escapeHtml(String(att.date || "").slice(0, 10))}</td>
                 <td>${att.score}/5 (${att.verifiedPct}%)</td>
                 <td><span class="ver-mini-pill level-${att.level.toLowerCase()}">${escapeHtml(att.level)}</span></td>
+                <td>${switchCell}</td>
               </tr>
-            `
-              )
+            `;
+              })
               .join("")}
           </tbody>
         </table>
@@ -662,7 +718,7 @@
         (n) => `
       <div class="replan-entry">
         <div class="replan-entry-top">
-          <strong>${escapeHtml(n.actionType === "retest_requested" ? "Retest Requested" : "Nudge Sent")} · ${escapeHtml(n.employeeName)}</strong>
+          <strong>${escapeHtml(n.actionType === "retest_requested" ? "Retest Requested" : n.actionType === "diagnostic_nudge" ? "Diagnostic Nudge Sent" : "Nudge Sent")} · ${escapeHtml(n.employeeName)}</strong>
           <span class="replan-date">${escapeHtml(String(n.createdAt || "").slice(0, 16).replace("T", " "))}</span>
         </div>
         <p>${escapeHtml(n.message)}</p>
@@ -678,6 +734,8 @@
       "Team",
       "Role",
       "Verified Skills",
+      "Gate Verified",
+      "Diagnostic Gate",
       "Average Level",
       "Course Completion %",
       "Last Test Date",
@@ -697,6 +755,8 @@
           r.team,
           r.roleName,
           r.verifiedCount,
+          `${r.gateVerifiedCount || 0}/${r.gateRequiredCount || 0}`,
+          r.gateStatusLabel || "Not started",
           r.avgLevel,
           r.completionPct,
           r.lastTestDate,

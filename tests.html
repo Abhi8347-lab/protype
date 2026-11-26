@@ -10,10 +10,10 @@
     <main class="page-shell">
       <section class="card" style="padding: 28px; max-width: 820px; margin: 0 auto;">
         <div class="ai-mini-badge">Node-Free Client Test Runner</div>
-        <h1 style="margin: 8px 0 6px;">SkillSync AI Diagnostic &amp; Engine Sanity Checks</h1>
+        <h1 style="margin: 8px 0 6px;">SkillSync AI Diagnostic, Gate &amp; Engine Sanity Checks</h1>
         <p class="card-sub" style="margin-bottom: 18px;">
-          Verifies <code>getLevel(easyCorrect, hardCorrect)</code>, level-to-score mapping,
-          and verified override logic directly in the browser.
+          Verifies <code>getLevel(easyCorrect, hardCorrect)</code>, <code>isGateCleared(state)</code>,
+          legacy migration, profile edit gate rules, and verified override logic directly in the browser.
         </p>
         <div id="test-summary" class="overall-pct-pill" style="display: inline-block; margin-bottom: 16px;">Running...</div>
         <ul id="test-results" class="roadmap-list"></ul>
@@ -25,9 +25,10 @@
     <script src="js/storage.js"></script>
     <script src="js/engine.js"></script>
     <script>
-      (function () {
+      (async function () {
         const Engine = window.SkillPathEngine;
         const Questions = window.SkillSyncQuestions;
+        const Storage = window.SkillPathStorage;
         const Data = window.SkillPathData;
 
         const cases = [];
@@ -36,7 +37,7 @@
           cases.push({ name, actual, expected, passed });
         }
 
-        // Required getLevel() sanity checks
+        // 1. Required getLevel() sanity checks
         assertEqual("getLevel(3, 2) -> 5/5 = Expert", Engine.getLevel(3, 2), "Expert");
         assertEqual("getLevel(3, 1) -> 4/5 with 3 easy = Intermediate", Engine.getLevel(3, 1), "Intermediate");
         assertEqual("getLevel(2, 1) -> 3/5 with 2 easy + 1 hard = Intermediate", Engine.getLevel(2, 1), "Intermediate");
@@ -44,12 +45,12 @@
         assertEqual("getLevel(2, 0) -> 2/5 = Beginner", Engine.getLevel(2, 0), "Beginner");
         assertEqual("getLevel(0, 0) -> 0/5 = Beginner", Engine.getLevel(0, 0), "Beginner");
 
-        // Verified percentage mapping checks
+        // 2. Verified percentage mapping checks
         assertEqual("Beginner -> 30%", Engine.getLevelPct("Beginner"), 30);
         assertEqual("Intermediate -> 60%", Engine.getLevelPct("Intermediate"), 60);
         assertEqual("Expert -> 90%", Engine.getLevelPct("Expert"), 90);
 
-        // Verified level overrides self-rated score in analyzeProfile()
+        // 3. Verified level overrides self-rated score in analyzeProfile()
         const analysis = Engine.analyzeProfile(
           {
             name: "Test User",
@@ -78,11 +79,163 @@
         assertEqual("Untested Statistics keeps self-rated 55%", statItem.effectivePct, 55);
         assertEqual("Untested Statistics marked Unverified", statItem.isVerified, false);
 
-        // Question bank coverage check
+        // 4. Question bank coverage check
         const allCatalogCovered = Data.SKILLS_CATALOG.every((s) =>
           Questions.hasQuestions(s.id)
         );
         assertEqual("Every catalog skill has 3 easy + 2 hard offline questions", allCatalogCovered, true);
+
+        // 5. Mandatory-diagnostic gate checks: isGateCleared(state)
+        assertEqual(
+          "isGateCleared: empty/no skills tested = false",
+          Engine.isGateCleared({
+            activeRole: "employee",
+            gate: { required: [], completed: [], cleared: false },
+          }),
+          false
+        );
+        assertEqual(
+          "isGateCleared: required skills with 0 tested = false",
+          Engine.isGateCleared({
+            activeRole: "employee",
+            gate: { required: ["sql", "power_bi"], completed: [], cleared: false },
+          }),
+          false
+        );
+        assertEqual(
+          "isGateCleared: some tested (1 of 2) = false",
+          Engine.isGateCleared({
+            activeRole: "employee",
+            gate: { required: ["sql", "power_bi"], completed: ["sql"], cleared: false },
+          }),
+          false
+        );
+        assertEqual(
+          "isGateCleared: all tested (2 of 2) = true",
+          Engine.isGateCleared({
+            activeRole: "employee",
+            gate: { required: ["sql", "power_bi"], completed: ["sql", "power_bi"], cleared: true },
+          }),
+          true
+        );
+        assertEqual(
+          "isGateCleared: new skill added = false again",
+          Engine.isGateCleared({
+            activeRole: "employee",
+            gate: {
+              required: ["sql", "power_bi", "python"],
+              completed: ["sql", "power_bi"],
+              cleared: false,
+            },
+          }),
+          false
+        );
+        assertEqual(
+          "isGateCleared: Manager role bypasses gate even with 0 tested",
+          Engine.isGateCleared({
+            activeRole: "manager",
+            gate: { required: ["sql", "power_bi"], completed: [], cleared: false },
+          }),
+          true
+        );
+        assertEqual(
+          "isGateCleared: HR role bypasses gate even with 0 tested",
+          Engine.isGateCleared({
+            activeRole: "hr",
+            gate: { required: ["sql", "power_bi"], completed: [], cleared: false },
+          }),
+          true
+        );
+
+        // 6. Storage migration + saveProfile + recordTestAttempt integration (preserving existing localStorage)
+        const backupV2 = window.localStorage.getItem("skillsync_ai_state_v2");
+        const backupV1 = window.localStorage.getItem("skillsync_ai_state_v1");
+        try {
+          window.localStorage.removeItem("skillsync_ai_state_v2");
+          window.localStorage.setItem(
+            "skillsync_ai_state_v1",
+            JSON.stringify({
+              schemaVersion: 2,
+              activeRole: "employee",
+              profile: {
+                name: "Legacy User",
+                targetRole: "junior_data_analyst",
+                selectedSkills: ["sql", "power_bi"],
+              },
+              verifiedLevels: { sql: { level: "Expert", verifiedPct: 90 } },
+            })
+          );
+          const migrated = Storage.readLocal();
+          assertEqual(
+            "Migration: legacy v2 user treated as gate not cleared",
+            Engine.isGateCleared(migrated),
+            false
+          );
+          assertEqual(
+            "Migration: legacy profile skills copied to gate.required",
+            migrated.gate.required.join(","),
+            "sql,power_bi"
+          );
+
+          // Complete both skills (even Beginner passes the gate)
+          await Storage.recordTestAttempt("emp_current", "sql", {
+            date: new Date().toISOString(),
+            score: 1,
+            easyCorrect: 1,
+            hardCorrect: 0,
+            level: "Beginner",
+            verifiedPct: 30,
+            tabSwitchCount: 0,
+          });
+          let stAfterOne = Storage.readLocal();
+          assertEqual(
+            "Gate stays locked after 1 of 2 completed",
+            Engine.isGateCleared(stAfterOne),
+            false
+          );
+
+          await Storage.recordTestAttempt("emp_current", "power_bi", {
+            date: new Date().toISOString(),
+            score: 4,
+            easyCorrect: 3,
+            hardCorrect: 1,
+            level: "Intermediate",
+            verifiedPct: 60,
+            tabSwitchCount: 1,
+          });
+          let stAfterTwo = Storage.readLocal();
+          assertEqual(
+            "Gate unlocks after all selected skills completed (including Beginner)",
+            Engine.isGateCleared(stAfterTwo),
+            true
+          );
+
+          // Adding a new skill locks gate again; removing drops requirement
+          await Storage.saveProfile({
+            ...stAfterTwo.profile,
+            selectedSkills: ["sql", "power_bi", "statistics"],
+          });
+          assertEqual(
+            "Adding new skill locks gate again",
+            Engine.isGateCleared(Storage.readLocal()),
+            false
+          );
+
+          await Storage.saveProfile({
+            ...stAfterTwo.profile,
+            selectedSkills: ["sql", "power_bi"],
+          });
+          assertEqual(
+            "Removing untested skill drops requirement and restores cleared gate",
+            Engine.isGateCleared(Storage.readLocal()),
+            true
+          );
+        } finally {
+          window.localStorage.removeItem("skillsync_ai_state_v2");
+          window.localStorage.removeItem("skillsync_ai_state_v1");
+          if (backupV2 !== null) window.localStorage.setItem("skillsync_ai_state_v2", backupV2);
+          if (backupV1 !== null) window.localStorage.setItem("skillsync_ai_state_v1", backupV1);
+        }
 
         const passedCount = cases.filter((c) => c.passed).length;
         const summaryEl = document.getElementById("test-summary");
