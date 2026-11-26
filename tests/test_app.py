@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from app import create_app
@@ -91,3 +93,51 @@ def test_ai_explain_fallback(client, monkeypatch) -> None:
 def test_ai_explain_rejects_bad_payload(client) -> None:
     resp = client.post("/api/ai-explain", data="not-json", content_type="text/plain")
     assert resp.status_code == 400
+
+
+def test_index_has_no_student_option(client) -> None:
+    resp = client.get("/index.html")
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+
+    select_match = re.search(
+        r'<select[^>]*id=["\']select-user-type["\'][^>]*>(.*?)</select>',
+        html,
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert select_match is not None, "Expected #select-user-type selector in index.html"
+    select_body = select_match.group(1)
+
+    option_values = re.findall(
+        r'<option[^>]*value=["\']([^"\']*)["\']', select_body, re.IGNORECASE
+    )
+    assert option_values == ["employee", "other"]
+    assert "student" not in select_body.lower()
+    assert re.search(r'<option[^>]*value=["\']?student["\']?', html, re.IGNORECASE) is None
+
+
+def test_ai_explain_other_non_tech_fallback(client, monkeypatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    resp = client.post(
+        "/api/ai-explain",
+        json={
+            "roleName": "Junior Data Analyst",
+            "companyPriority": "Dashboards",
+            "userType": "other",
+            "previousField": "Retail",
+            "courses": [
+                {
+                    "courseId": "mslearn-powerbi-start",
+                    "title": "Power BI Essentials",
+                    "skillName": "Power BI",
+                    "currentPct": 40,
+                    "targetPct": 80,
+                    "isPriorityMatch": True,
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    explanation = resp.get_json()["explanations"]["mslearn-powerbi-start"]
+    assert "Retail" in explanation
+    assert "fundamentals" in explanation.lower()

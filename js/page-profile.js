@@ -15,12 +15,18 @@
   function createDraftFromProfile(profile) {
     const defaultRole =
       Data.ROLE_MAP["ai_ml_engineer"]?.id || Data.ROLES_CATALOG[0].id;
+    const rawType = profile?.userType ?? profile?.status;
+    const userType = rawType === "other" ? "other" : "employee";
     return {
       name: profile?.name || "",
       isDemo: Boolean(profile?.isDemo),
-      status: profile?.status || "student",
+      userType,
+      previousField:
+        userType === "other" && typeof profile?.previousField === "string"
+          ? profile.previousField
+          : "",
       backgroundDetail:
-        profile?.backgroundDetail || Data.BACKGROUND_OPTIONS.student.choices[0],
+        profile?.backgroundDetail || Data.BACKGROUND_OPTIONS[userType].choices[0],
       targetRole: profile?.targetRole || defaultRole,
       companyPriority:
         profile?.companyPriority || Data.COMPANY_PRIORITIES[0].id,
@@ -56,9 +62,12 @@
   const verifySkillsTopBtn = document.getElementById("btn-verify-skills-top");
 
   const nameInput = document.getElementById("input-name");
-  const statusOptionsEl = document.getElementById("status-options");
+  const userTypeSelectEl = document.getElementById("select-user-type");
+  const userTypeHelperEl = document.getElementById("user-type-helper");
   const backgroundLabelEl = document.getElementById("background-label");
   const backgroundSelectEl = document.getElementById("select-background");
+  const previousFieldGroupEl = document.getElementById("previous-field-group");
+  const previousFieldInputEl = document.getElementById("input-previous-field");
   const roleSelectEl = document.getElementById("select-role");
   const prioritySelectEl = document.getElementById("select-priority");
   const rolePreviewEl = document.getElementById("role-preview-card");
@@ -78,16 +87,6 @@
     5: "Expert",
   };
 
-  function statusIconSvg(icon) {
-    if (icon === "graduation") {
-      return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>`;
-    }
-    if (icon === "briefcase") {
-      return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>`;
-    }
-    return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>`;
-  }
-
   function showError(msg) {
     if (!msg) {
       errorBox.hidden = true;
@@ -98,42 +97,31 @@
     errorBox.textContent = msg;
   }
 
-  function renderStatusOptions() {
-    statusOptionsEl.innerHTML = Data.STATUS_OPTIONS.map((opt) => {
-      const selected = draft.status === opt.id;
-      return `
-        <button
-          type="button"
-          class="choice-card ${selected ? "is-selected" : ""}"
-          data-status="${opt.id}"
-          aria-pressed="${selected}"
-        >
-          <span class="choice-icon">${statusIconSvg(opt.icon)}</span>
-          <span class="choice-title">${escapeHtml(opt.label)}</span>
-          <span class="choice-desc">${escapeHtml(opt.description)}</span>
-        </button>
-      `;
-    }).join("");
+  function renderUserTypeSelect() {
+    userTypeSelectEl.innerHTML = Data.STATUS_OPTIONS.map(
+      (opt) =>
+        `<option value="${escapeHtml(opt.id)}" ${draft.userType === opt.id ? "selected" : ""}>${escapeHtml(opt.label)}</option>`
+    ).join("");
+    userTypeSelectEl.value = draft.userType;
 
-    statusOptionsEl.querySelectorAll(".choice-card").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const nextStatus = btn.getAttribute("data-status");
-        if (nextStatus !== draft.status) {
-          draft.status = nextStatus;
-          const bgConfig = Data.BACKGROUND_OPTIONS[nextStatus];
-          draft.backgroundDetail = bgConfig.choices[0];
-          draft.isDemo = false;
-          renderStatusOptions();
-          renderBackgroundDropdown();
-          renderSummaryPreview();
-        }
-      });
-    });
+    const selectedOpt =
+      Data.STATUS_OPTIONS.find((opt) => opt.id === draft.userType) ||
+      Data.STATUS_OPTIONS[0];
+    if (userTypeHelperEl && selectedOpt) {
+      userTypeHelperEl.textContent = selectedOpt.description;
+    }
+
+    if (previousFieldGroupEl) {
+      previousFieldGroupEl.hidden = draft.userType !== "other";
+    }
+    if (previousFieldInputEl) {
+      previousFieldInputEl.value = draft.previousField || "";
+    }
   }
 
   function renderBackgroundDropdown() {
     const config =
-      Data.BACKGROUND_OPTIONS[draft.status] || Data.BACKGROUND_OPTIONS.other;
+      Data.BACKGROUND_OPTIONS[draft.userType] || Data.BACKGROUND_OPTIONS.other;
     backgroundLabelEl.innerHTML = `${escapeHtml(config.label)} <span class="req">*</span>`;
 
     if (!config.choices.includes(draft.backgroundDetail)) {
@@ -368,8 +356,12 @@
         const skillId = btn.getAttribute("data-take-quiz");
         const clean = buildCleanProfile();
         if (!clean.name) clean.name = "Employee";
-        await Storage.saveProfile(clean);
-        window.location.href = `quiz.html?skill=${encodeURIComponent(skillId)}`;
+        try {
+          await Storage.saveProfile(clean);
+          window.location.href = `quiz.html?skill=${encodeURIComponent(skillId)}`;
+        } catch (err) {
+          showError(err?.message || "Invalid profile details.");
+        }
       });
     });
 
@@ -449,6 +441,12 @@
     const role = Data.ROLE_MAP[draft.targetRole] || Data.ROLES_CATALOG[0];
     const exp = Data.EXPERIENCE_OPTIONS.find((e) => e.id === draft.experience);
     const displayName = draft.name.trim() || "You";
+    const typeLabel =
+      draft.userType === "other" ? "New joiner / Other" : "Employee";
+    const prevFieldNote =
+      draft.userType === "other" && draft.previousField.trim()
+        ? ` · Previous field: ${draft.previousField.trim()}`
+        : "";
     const demoNote = draft.isDemo
       ? `<span class="sample-label-tag">Sample data for demonstration</span>`
       : "";
@@ -459,7 +457,7 @@
         ${demoNote}
       </div>
       <p>
-        <strong>${escapeHtml(displayName)}</strong> (${escapeHtml(draft.backgroundDetail)})
+        <strong>${escapeHtml(displayName)}</strong> (${escapeHtml(typeLabel)} · ${escapeHtml(draft.backgroundDetail)}${escapeHtml(prevFieldNote)})
         → targeting <strong>${escapeHtml(role.name)}</strong> · Priority:
         <strong>${escapeHtml(draft.companyPriority)}</strong> ·
         <strong>${draft.selectedSkills.length}</strong> selected skill${draft.selectedSkills.length === 1 ? "" : "s"} ·
@@ -472,12 +470,17 @@
   function validateStep(step) {
     if (step === 1) {
       if (!draft.name.trim()) {
-        showError("Please enter your name before continuing.");
+        showError("Please enter the employee or learner name before continuing.");
         nameInput.focus();
         return false;
       }
-      if (!draft.status || !draft.backgroundDetail) {
-        showError("Please select your current status and background.");
+      if (!Storage.isValidUserType(draft.userType)) {
+        showError("Please select a valid user type: Employee or Other.");
+        userTypeSelectEl.focus();
+        return false;
+      }
+      if (!draft.backgroundDetail) {
+        showError("Please select a current role or onboarding focus.");
         return false;
       }
     }
@@ -545,7 +548,10 @@
     return {
       name: draft.name.trim(),
       isDemo: Boolean(draft.isDemo),
-      status: draft.status,
+      userType: draft.userType,
+      status: draft.userType,
+      previousField:
+        draft.userType === "other" ? draft.previousField.trim() : "",
       backgroundDetail: draft.backgroundDetail,
       targetRole: draft.targetRole,
       companyPriority: draft.companyPriority,
@@ -577,9 +583,16 @@
     btnNext.disabled = true;
     btnNext.textContent = "Saving...";
     const cleanProfile = buildCleanProfile();
-    await Storage.saveProfile(cleanProfile);
-    // Always redirect to quiz for mandatory diagnostic gate
-    window.location.href = "quiz.html";
+    try {
+      await Storage.saveProfile(cleanProfile);
+      // Always redirect to quiz for mandatory diagnostic gate
+      window.location.href = "quiz.html";
+    } catch (err) {
+      btnNext.disabled = false;
+      btnNext.textContent = "Save & Start Diagnostic →";
+      goToStep(1);
+      showError(err?.message || "Invalid user type. Please choose Employee or Other.");
+    }
   }
 
   function syncDemoBannerButtons(state) {
@@ -598,7 +611,7 @@
 
   function renderAllWizardSections() {
     nameInput.value = draft.name;
-    renderStatusOptions();
+    renderUserTypeSelect();
     renderBackgroundDropdown();
     renderRoleAndPrioritySelects();
     renderSkillCategoryFilters();
@@ -638,6 +651,31 @@
     draft.isDemo = false;
     if (draft.name.trim()) showError("");
   });
+
+  userTypeSelectEl.addEventListener("change", (e) => {
+    const nextType = e.target.value;
+    if (!Storage.isValidUserType(nextType)) {
+      showError("Invalid user type. Please choose Employee or Other.");
+      return;
+    }
+    draft.userType = nextType;
+    const bgConfig =
+      Data.BACKGROUND_OPTIONS[nextType] || Data.BACKGROUND_OPTIONS.other;
+    draft.backgroundDetail = bgConfig.choices[0];
+    draft.isDemo = false;
+    showError("");
+    renderUserTypeSelect();
+    renderBackgroundDropdown();
+    renderSummaryPreview();
+  });
+
+  if (previousFieldInputEl) {
+    previousFieldInputEl.addEventListener("input", (e) => {
+      draft.previousField = e.target.value;
+      draft.isDemo = false;
+      renderSummaryPreview();
+    });
+  }
 
   backgroundSelectEl.addEventListener("change", (e) => {
     draft.backgroundDetail = e.target.value;

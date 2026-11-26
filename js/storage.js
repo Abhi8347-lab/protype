@@ -10,6 +10,40 @@ window.SkillPathStorage = (function () {
   const LEGACY_KEY_OLD = "skillpath_ai_state_v1";
   const THEME_KEY = "skillsync_ai_theme";
   const CURRENT_EMP_ID = "emp_current";
+  const VALID_USER_TYPES = ["employee", "other"];
+
+  function isValidUserType(value) {
+    return VALID_USER_TYPES.includes(value);
+  }
+
+  function normalizeUserType(value) {
+    return isValidUserType(value) ? value : "other";
+  }
+
+  function migrateProfileUserType(profileObj) {
+    if (!profileObj || typeof profileObj !== "object") {
+      return { profile: null, changed: false };
+    }
+    const rawType =
+      profileObj.userType !== undefined
+        ? profileObj.userType
+        : profileObj.status;
+    const normalized = normalizeUserType(rawType);
+    const changed =
+      profileObj.userType !== normalized || profileObj.status !== normalized;
+    return {
+      profile: {
+        ...profileObj,
+        userType: normalized,
+        status: normalized,
+        previousField:
+          typeof profileObj.previousField === "string"
+            ? profileObj.previousField
+            : "",
+      },
+      changed,
+    };
+  }
 
   function defaultState() {
     const defaultPriorities =
@@ -54,10 +88,11 @@ window.SkillPathStorage = (function () {
       !parsed.schemaVersion ||
       Number(parsed.schemaVersion) < 3;
 
-    const profileObj =
+    const rawProfileObj =
       parsed.profile && typeof parsed.profile === "object"
         ? parsed.profile
         : null;
+    const { profile: profileObj } = migrateProfileUserType(rawProfileObj);
     const profileSkills = Array.isArray(profileObj?.selectedSkills)
       ? profileObj.selectedSkills.slice()
       : [];
@@ -161,8 +196,14 @@ window.SkillPathStorage = (function () {
         return defaultState();
       }
       const parsed = JSON.parse(raw);
+      const profileMigration = migrateProfileUserType(parsed?.profile);
       const migrated = migrateState(parsed);
-      if (needsMigrationSave || !parsed.schemaVersion || parsed.schemaVersion < 3) {
+      if (
+        needsMigrationSave ||
+        profileMigration.changed ||
+        !parsed.schemaVersion ||
+        parsed.schemaVersion < 3
+      ) {
         writeLocal(migrated);
       }
       return migrated;
@@ -189,9 +230,36 @@ window.SkillPathStorage = (function () {
   }
 
   async function saveProfile(profile) {
+    if (!profile || typeof profile !== "object") {
+      throw new Error("Profile data is required.");
+    }
+
+    const rawUserType =
+      profile.userType !== undefined ? profile.userType : profile.status;
+    if (!isValidUserType(rawUserType)) {
+      throw new Error(
+        "Invalid user type. Please choose Employee or Other."
+      );
+    }
+    if (profile.status !== undefined && !isValidUserType(profile.status)) {
+      throw new Error(
+        "Invalid user type. Please choose Employee or Other."
+      );
+    }
+
+    const sanitizedProfile = {
+      ...profile,
+      userType: rawUserType,
+      status: rawUserType,
+      previousField:
+        rawUserType === "other"
+          ? String(profile.previousField || "").trim()
+          : "",
+    };
+
     const local = readLocal();
-    const newSelected = Array.isArray(profile?.selectedSkills)
-      ? profile.selectedSkills.slice()
+    const newSelected = Array.isArray(sanitizedProfile.selectedSkills)
+      ? sanitizedProfile.selectedSkills.slice()
       : [];
 
     const prevGate = local.gate || {
@@ -212,7 +280,7 @@ window.SkillPathStorage = (function () {
     const isCleared =
       newRequired.length > 0
         ? newRequired.every((s) => newCompleted.includes(s))
-        : Boolean(profile && Array.isArray(profile.selectedSkills));
+        : Boolean(sanitizedProfile && Array.isArray(sanitizedProfile.selectedSkills));
 
     const gate = {
       required: newRequired,
@@ -231,7 +299,7 @@ window.SkillPathStorage = (function () {
 
     return writeLocal({
       ...local,
-      profile,
+      profile: sanitizedProfile,
       gate,
       inProgress: updatedInProgress,
       updatedAt: new Date().toISOString(),
@@ -504,6 +572,9 @@ window.SkillPathStorage = (function () {
 
   return {
     CURRENT_EMP_ID,
+    VALID_USER_TYPES,
+    isValidUserType,
+    normalizeUserType,
     readLocal,
     initState,
     saveProfile,

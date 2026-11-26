@@ -112,6 +112,17 @@ window.SkillPathEngine = (function () {
     const roleName =
       window.SkillPathData.ROLE_MAP[profile.targetRole]?.name ||
       "your target role";
+    const userType = profile?.userType || profile?.status || "employee";
+    const isOther = userType === "other";
+    const prevField =
+      isOther && profile?.previousField
+        ? String(profile.previousField).trim()
+        : "";
+    const nonTechNote = isOther
+      ? prevField
+        ? ` Since you are moving from ${prevField} (a non-tech background), this starts from fundamentals.`
+        : " Since you are moving from a non-tech background, this starts from fundamentals."
+      : "";
 
     const scoreSourceText = skillItem.isVerified
       ? `verified ${skillItem.verifiedLevel} (${skillItem.baselinePct}%)`
@@ -122,7 +133,7 @@ window.SkillPathEngine = (function () {
     }
 
     if (course.isCapstone) {
-      return `Recommended as your Week 6 capstone to apply your SQL (${resolveInitialPct(profile, "sql")}%) and ${skillItem.skillName} (${scoreSourceText}) to a real ${priorityText || "executive"} dashboard.`;
+      return `Recommended as your Week 6 capstone to apply your SQL (${resolveInitialPct(profile, "sql")}%) and ${skillItem.skillName} (${scoreSourceText}) to a real ${priorityText || "executive"} dashboard.${nonTechNote}`;
     }
 
     if (skillItem.isPriorityMatch) {
@@ -130,10 +141,10 @@ window.SkillPathEngine = (function () {
         skillItem.matchedPriorities[0] ||
         priorityText ||
         "organization priority";
-      return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%) and ${pLabel} is a current company priority.`;
+      return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%) and ${pLabel} is a current company priority.${nonTechNote}`;
     }
 
-    return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%), closing a ${skillItem.requiredPct - skillItem.baselinePct}% gap needed for ${roleName}.`;
+    return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%), closing a ${skillItem.requiredPct - skillItem.baselinePct}% gap needed for ${roleName}.${nonTechNote}`;
   }
 
   function generateSixWeekPlan(profile, roadmap) {
@@ -649,13 +660,20 @@ window.SkillPathEngine = (function () {
     } = ctx;
 
     const firstName = (profile.name || "Learner").trim().split(/\s+/)[0];
+    const isOther = (profile.userType || profile.status) === "other";
+    const prevField =
+      isOther && profile.previousField ? String(profile.previousField).trim() : "";
     const strongSkills = roadmap
       .filter((s) => s.status === "strong")
       .map((s) => `${s.skillName} (${s.effectivePct}%)`);
 
-    const bgText = profile.backgroundDetail
-      ? `your ${profile.backgroundDetail} background`
-      : "your current profile";
+    const bgText = isOther
+      ? prevField
+        ? `your non-tech background in ${prevField} (${profile.backgroundDetail || "New joiner"})`
+        : `your ${profile.backgroundDetail || "new-joiner"} onboarding profile (starting from fundamentals)`
+      : profile.backgroundDetail
+        ? `your ${profile.backgroundDetail} background`
+        : "your current profile";
 
     const priorityText = activePriorities.length
       ? ` aligned with company priority: ${activePriorities.join(", ")}`
@@ -726,9 +744,14 @@ window.SkillPathEngine = (function () {
       : data.DEFAULT_ORG_PRIORITIES || [];
 
     const records = (data.SEED_EMPLOYEES || []).map((emp) => {
+      const empUserType = emp.userType === "other" ? "other" : "employee";
+      const empTypeLabel =
+        empUserType === "other" ? "New joiner / Other" : "Employee";
       const pseudoProfile = {
         name: emp.name,
-        status: "employee",
+        userType: empUserType,
+        status: empUserType,
+        previousField: emp.previousField || "",
         backgroundDetail: data.ROLE_MAP[emp.targetRole]?.name || "Analyst",
         targetRole: emp.targetRole,
         companyPriority: emp.companyPriority,
@@ -795,6 +818,9 @@ window.SkillPathEngine = (function () {
       return {
         id: emp.id,
         name: emp.name,
+        userType: empUserType,
+        userTypeLabel: empTypeLabel,
+        previousField: emp.previousField || "",
         isCurrentUser: false,
         isSeededDemo: true,
         team: emp.team,
@@ -909,9 +935,20 @@ window.SkillPathEngine = (function () {
           ? "In progress"
           : "Not started";
 
+    const currentUserType =
+      (activeProfile.userType || activeProfile.status) === "other"
+        ? "other"
+        : "employee";
+    const currentTypeLabel =
+      currentUserType === "other" ? "New joiner / Other" : "Employee";
+
     records.unshift({
       id: currentEmpId,
       name: activeProfile.name || "Current Employee",
+      userType: currentUserType,
+      userTypeLabel: currentTypeLabel,
+      previousField:
+        currentUserType === "other" ? activeProfile.previousField || "" : "",
       isCurrentUser: true,
       isSeededDemo: Boolean(activeProfile.isDemo),
       team: data.MANAGER_TEAM_NAME,
@@ -1068,6 +1105,8 @@ window.SkillPathEngine = (function () {
         body: JSON.stringify({
           roleName: analysis.role.name,
           companyPriority: (analysis.activePriorities || [])[0] || "",
+          userType: profile.userType || profile.status || "employee",
+          previousField: profile.previousField || "",
           courses: flatCourses,
         }),
       });

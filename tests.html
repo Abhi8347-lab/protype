@@ -230,6 +230,134 @@
             Engine.isGateCleared(Storage.readLocal()),
             true
           );
+
+          // 7. UserType options, migration & validation checks
+          assertEqual(
+            "Catalog STATUS_OPTIONS has exactly 2 user types (employee, other)",
+            Data.STATUS_OPTIONS.map((o) => o.id).join(","),
+            "employee,other"
+          );
+
+          if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+            const indexResp = await window.fetch("index.html");
+            const indexHtml = await indexResp.text();
+            const parsedDoc = new DOMParser().parseFromString(indexHtml, "text/html");
+            const userTypeOpts = Array.from(
+              parsedDoc.querySelectorAll("#select-user-type option")
+            ).map((opt) => opt.value);
+            assertEqual(
+              "index.html userType selector has exactly 2 options (employee,other)",
+              userTypeOpts.join(","),
+              "employee,other"
+            );
+            assertEqual(
+              "index.html userType selector defaults to employee",
+              parsedDoc.querySelector("#select-user-type option[selected]")?.value,
+              "employee"
+            );
+          }
+
+          window.localStorage.removeItem("skillsync_ai_state_v2");
+          window.localStorage.setItem(
+            "skillsync_ai_state_v2",
+            JSON.stringify({
+              schemaVersion: 3,
+              activeRole: "employee",
+              profile: {
+                name: "Legacy Switcher",
+                userType: "student",
+                status: "student",
+                targetRole: "junior_data_analyst",
+                companyPriority: "Dashboards",
+                selectedSkills: ["sql"],
+              },
+              gate: { required: ["sql"], completed: [], cleared: false },
+            })
+          );
+          const migratedStudent = Storage.readLocal();
+          assertEqual(
+            "Migration converts userType 'student' to 'other'",
+            migratedStudent.profile.userType,
+            "other"
+          );
+          assertEqual(
+            "Migration preserves rest of profile data (name)",
+            migratedStudent.profile.name,
+            "Legacy Switcher"
+          );
+
+          window.localStorage.setItem(
+            "skillsync_ai_state_v2",
+            JSON.stringify({
+              schemaVersion: 3,
+              activeRole: "employee",
+              profile: {
+                name: "Unknown Type User",
+                userType: "unknown_role",
+                targetRole: "junior_data_analyst",
+                selectedSkills: ["sql"],
+              },
+              gate: { required: ["sql"], completed: [], cleared: false },
+            })
+          );
+          assertEqual(
+            "Migration converts unknown userType to 'other'",
+            Storage.readLocal().profile.userType,
+            "other"
+          );
+
+          let rejectedStudent = false;
+          try {
+            await Storage.saveProfile({
+              name: "Invalid User",
+              userType: "student",
+              targetRole: "junior_data_analyst",
+              selectedSkills: ["sql"],
+            });
+          } catch (_err) {
+            rejectedStudent = true;
+          }
+          assertEqual("Saving userType 'student' fails", rejectedStudent, true);
+
+          let rejectedInvalid = false;
+          try {
+            await Storage.saveProfile({
+              name: "Invalid User",
+              userType: "contractor_invalid",
+              targetRole: "junior_data_analyst",
+              selectedSkills: ["sql"],
+            });
+          } catch (_err) {
+            rejectedInvalid = true;
+          }
+          assertEqual("Saving unknown userType fails", rejectedInvalid, true);
+
+          await Storage.saveProfile({
+            name: "New Joiner",
+            userType: "other",
+            previousField: "Retail",
+            targetRole: "junior_data_analyst",
+            companyPriority: "Dashboards",
+            skillScores: { sql: 80, power_bi: 40, statistics: 55 },
+            selectedSkills: ["sql"],
+          });
+          const otherSaved = Storage.readLocal();
+          assertEqual(
+            "Saving userType 'other' persists userType and previousField",
+            `${otherSaved.profile.userType}:${otherSaved.profile.previousField}`,
+            "other:Retail"
+          );
+
+          const otherAnalysis = Engine.analyzeProfile(otherSaved.profile, {}, otherSaved);
+          const pbiCourseWhy =
+            otherAnalysis.roadmap.find((s) => s.skillId === "power_bi")?.courses[0]
+              ?.whyRecommended || "";
+          assertEqual(
+            "Why-this-course mentions non-tech background / fundamentals for 'other'",
+            pbiCourseWhy.toLowerCase().includes("fundamentals") &&
+              pbiCourseWhy.includes("Retail"),
+            true
+          );
         } finally {
           window.localStorage.removeItem("skillsync_ai_state_v2");
           window.localStorage.removeItem("skillsync_ai_state_v1");

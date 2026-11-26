@@ -11,11 +11,11 @@
 
     <main class="page-shell">
       <section class="hero-intro hero-compact">
-        <div class="hero-badge">SkillSync AI · Corporate Upskilling Agent</div>
-        <h1>Build your personalized upskilling plan in 60 seconds</h1>
+        <div class="hero-badge">SkillSync AI · Corporate Upskilling &amp; Onboarding</div>
+        <h1>Upskill your employees &amp; onboard new joiners in 60 seconds</h1>
         <p class="hero-subtitle">
-          Select your role, company priority, current skill scores, and weekly learning slots
-          for an explainable skill gap roadmap and 6-week plan.
+          Configure an employee or new-joiner profile, target role, company priority, current skill scores,
+          and weekly learning slots for an explainable skill gap roadmap and 6-week plan.
         </p>
       </section>
 
@@ -84,21 +84,21 @@
         </div>
 
         <form id="profile-wizard-form" novalidate>
-          <!-- STEP 1: Name, Status & Conditional Background -->
+          <!-- STEP 1: Name, User Type & Background -->
           <div class="wizard-panel is-active" data-panel="1">
             <div class="panel-heading">
-              <h2>Tell us a little about yourself</h2>
-              <p>Only your name is typed — everything else is a quick pick.</p>
+              <h2>Employee &amp; learner details</h2>
+              <p>Enter the learner&rsquo;s name, choose Employee or Other, and select their current role or onboarding focus.</p>
             </div>
 
             <div class="form-group">
-              <label for="input-name" class="field-label">Your Name <span class="req">*</span></label>
+              <label for="input-name" class="field-label">Employee / Learner Name <span class="req">*</span></label>
               <input
                 type="text"
                 id="input-name"
                 name="name"
                 class="text-input"
-                placeholder="Enter your name (e.g., Jordan Patel)"
+                placeholder="Enter name (e.g., Jordan Patel)"
                 autocomplete="name"
                 maxlength="80"
                 required
@@ -106,29 +106,49 @@
             </div>
 
             <div class="form-group">
-              <span class="field-label">Current Status <span class="req">*</span></span>
-              <div id="status-options" class="option-grid option-grid-3"></div>
+              <label for="select-user-type" class="field-label">I am a <span class="req">*</span></label>
+              <select id="select-user-type" name="userType" class="select-input" required>
+                <option value="employee" selected>Employee</option>
+                <option value="other">Other</option>
+              </select>
+              <p id="user-type-helper" class="field-helper">
+                Currently working in this organization and looking to upskill.
+              </p>
             </div>
 
             <div class="form-group" id="background-group">
               <label for="select-background" id="background-label" class="field-label">
-                What are you studying? <span class="req">*</span>
+                What is your current role or department? <span class="req">*</span>
               </label>
               <select id="select-background" class="select-input" required></select>
             </div>
+
+            <div class="form-group" id="previous-field-group" hidden>
+              <label for="input-previous-field" class="field-label">
+                Previous field / background <span class="optional-label">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                id="input-previous-field"
+                name="previousField"
+                class="text-input"
+                placeholder="e.g., Retail, Teaching, Banking"
+                maxlength="80"
+              />
+            </div>
           </div>
 
-          <!-- STEP 2: Target Career Role & Company Priority -->
+          <!-- STEP 2: Target Role & Company Priority -->
           <div class="wizard-panel" data-panel="2" hidden>
             <div class="panel-heading">
               <h2>Target role &amp; company priority</h2>
-              <p>Choose your role aim and the business priority your upskilling supports.</p>
+              <p>Choose the target role and the company priority this upskilling plan supports.</p>
             </div>
 
             <div class="form-grid-2">
               <div class="form-group">
                 <label for="select-role" class="field-label">
-                  Career Aim / Target Role <span class="req">*</span>
+                  Target Role <span class="req">*</span>
                 </label>
                 <select id="select-role" class="select-input" required></select>
               </div>

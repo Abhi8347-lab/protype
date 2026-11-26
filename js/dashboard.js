@@ -14,6 +14,7 @@
   let sortCol = "completionPct";
   let sortDir = "asc";
   let searchQuery = "";
+  let userTypeFilter = "all";
   let roleFilter = "all";
   let levelFilter = "all";
   let statusFilter = "all";
@@ -62,6 +63,7 @@
       ) {
         return false;
       }
+      if (userTypeFilter !== "all" && emp.userType !== userTypeFilter) return false;
       if (roleFilter !== "all" && emp.roleId !== roleFilter) return false;
       if (levelFilter !== "all" && emp.avgLevel !== levelFilter) return false;
       if (statusFilter !== "all" && emp.status !== statusFilter) return false;
@@ -448,13 +450,24 @@
               const isSelected = emp.id === selectedEmployeeId;
               const gateInfo = emp.gateStatus || "not_started";
               const gateTag = renderGateBadgeHtml(emp);
+              const typeBadgeClass =
+                emp.userType === "other" ? "type-badge-other" : "type-badge-employee";
+              const typeBadgeText =
+                emp.userType === "other" ? "New joiner / Other" : "Employee";
+              const typeTooltip =
+                emp.userType === "other" && emp.previousField
+                  ? `title="Previous field: ${escapeHtml(emp.previousField)}"`
+                  : "";
 
               return `
                 <tr class="perf-row ${isSelected ? "is-selected-row" : ""}" data-row-emp="${escapeHtml(emp.id)}">
                   <td>
-                    <button type="button" class="row-name-btn" data-inspect-btn="${escapeHtml(emp.id)}">
-                      ${escapeHtml(emp.displayName)}
-                    </button>
+                    <div class="row-name-wrap">
+                      <button type="button" class="row-name-btn" data-inspect-btn="${escapeHtml(emp.id)}">
+                        ${escapeHtml(emp.displayName)}
+                      </button>
+                      <span class="user-type-badge ${typeBadgeClass}" ${typeTooltip}>${escapeHtml(typeBadgeText)}</span>
+                    </div>
                   </td>
                   <td>${escapeHtml(emp.roleName)}</td>
                   <td><strong>${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0}</strong> <span class="muted-note">(${emp.verifiedCount} total)</span></td>
@@ -554,11 +567,17 @@
     detailCard.hidden = false;
 
     const gateLabel = emp.gateStatusLabel || "Not started";
+    const typeLabel =
+      emp.userType === "other" ? "New joiner / Other" : "Employee";
+    const prevFieldSuffix =
+      emp.userType === "other" && emp.previousField
+        ? ` (Previous field: ${emp.previousField})`
+        : "";
     document.getElementById("detail-team-badge").textContent =
-      `${emp.team} · ${emp.status} · Gate: ${gateLabel}`;
+      `${emp.team} · ${typeLabel} · ${emp.status} · Gate: ${gateLabel}`;
     document.getElementById("detail-emp-name").textContent = emp.displayName;
     document.getElementById("detail-emp-meta").innerHTML = `
-      <span>${escapeHtml(emp.roleName)} · ${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0} required skills verified · ${emp.completionPct}% course completion</span>
+      <span>${escapeHtml(emp.roleName)}${escapeHtml(prevFieldSuffix)} · ${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0} required skills verified · ${emp.completionPct}% course completion</span>
       ${renderGateBadgeHtml(emp)}
     `;
 
@@ -731,6 +750,7 @@
   function exportCsv(rows) {
     const headers = [
       "Name",
+      "Type",
       "Team",
       "Role",
       "Verified Skills",
@@ -752,6 +772,7 @@
       ...rows.map((r) =>
         [
           r.displayName,
+          r.userTypeLabel || (r.userType === "other" ? "New joiner / Other" : "Employee"),
           r.team,
           r.roleName,
           r.verifiedCount,
@@ -842,6 +863,11 @@
 
   document.getElementById("dash-search").addEventListener("input", (e) => {
     searchQuery = e.target.value;
+    renderAll();
+  });
+
+  document.getElementById("dash-filter-usertype").addEventListener("change", (e) => {
+    userTypeFilter = e.target.value;
     renderAll();
   });
 

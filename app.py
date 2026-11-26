@@ -110,6 +110,20 @@ def build_fallback_explanations(payload: dict[str, Any]) -> dict[str, Any]:
     """Generate deterministic, explainable course rationales when no AI API is used."""
     role_name = str(payload.get("roleName") or "your target role")
     priority = str(payload.get("companyPriority") or "").strip()
+    user_type = str(payload.get("userType") or "employee").strip().lower()
+    previous_field = str(payload.get("previousField") or "").strip()
+    non_tech_note = ""
+    if user_type == "other":
+        if previous_field:
+            non_tech_note = (
+                f" Since you are moving from {previous_field} (a non-tech background), "
+                "this starts from fundamentals."
+            )
+        else:
+            non_tech_note = (
+                " Since you are moving from a non-tech background, "
+                "this starts from fundamentals."
+            )
     courses = payload.get("courses") or []
 
     explanations: dict[str, str] = {}
@@ -132,13 +146,13 @@ def build_fallback_explanations(payload: dict[str, Any]) -> dict[str, Any]:
         elif is_priority and priority:
             explanations[course_id] = (
                 f"Recommended because your {skill_name} score is {current_pct}% "
-                f"(target {target_pct}%) and {priority} is a current company priority."
+                f"(target {target_pct}%) and {priority} is a current company priority.{non_tech_note}"
             )
         else:
             gap = max(0, target_pct - current_pct)
             explanations[course_id] = (
                 f"Recommended because your {skill_name} score is {current_pct}% "
-                f"(target {target_pct}%), closing a {gap}% gap required for {role_name}."
+                f"(target {target_pct}%), closing a {gap}% gap required for {role_name}.{non_tech_note}"
             )
 
     return {
@@ -158,6 +172,15 @@ def try_gemini_explanations(
 
     role_name = str(payload.get("roleName") or "Target Role")
     priority = str(payload.get("companyPriority") or "General upskilling")
+    user_type = str(payload.get("userType") or "employee").strip().lower()
+    previous_field = str(payload.get("previousField") or "").strip()
+    background_hint = ""
+    if user_type == "other":
+        origin = previous_field or "a non-tech field"
+        background_hint = (
+            f" The learner is a new joiner or career switcher moving from {origin}, "
+            "so mention starting from fundamentals."
+        )
     compact_courses = [
         {
             "courseId": c.get("courseId"),
@@ -173,7 +196,7 @@ def try_gemini_explanations(
 
     prompt = (
         "You are SkillSync AI, a corporate upskilling advisor. "
-        f"Target role: {role_name}. Company priority: {priority}. "
+        f"Target role: {role_name}. Company priority: {priority}.{background_hint} "
         "For each course below, write ONE concise, clear sentence explaining why it is recommended, "
         "explicitly mentioning the learner's current % vs target % and company priority if relevant. "
         "Return ONLY valid JSON mapping courseId -> explanation string.\n"

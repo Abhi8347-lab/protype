@@ -1,48 +1,26 @@
 /**
- * Canonical domain catalog for SkillPath AI:
+ * Canonical domain catalog for SkillSync AI:
  * profile options, skills, target role roadmaps, and curated multi-platform courses.
  */
 window.SkillPathData = (function () {
   const STATUS_OPTIONS = [
     {
-      id: "student",
-      label: "Student",
-      description: "Currently enrolled in school, college, or university",
-      icon: "graduation",
-    },
-    {
       id: "employee",
       label: "Employee",
-      description: "Working full-time or part-time in any industry",
+      description: "Currently working in this organization and looking to upskill.",
       icon: "briefcase",
     },
     {
       id: "other",
       label: "Other",
-      description: "Career switcher, graduate, freelancer, or self-learner",
+      description: "New joiner or career switcher, for example moving in from a non-tech field.",
       icon: "compass",
     },
   ];
 
   const BACKGROUND_OPTIONS = {
-    student: {
-      label: "What are you studying?",
-      placeholder: "Select your field of study",
-      choices: [
-        "Computer Science & Engineering (CSE)",
-        "Electronics & Communication (ECE)",
-        "Data Science & AI",
-        "Information Technology (IT)",
-        "Mechanical Engineering",
-        "Electrical Engineering",
-        "Mathematics / Statistics",
-        "Business / Finance",
-        "Other STEM",
-        "Arts / Commerce / Non-Technical",
-      ],
-    },
     employee: {
-      label: "What is your current profession?",
+      label: "What is your current role or department?",
       placeholder: "Select your current role",
       choices: [
         "Software Developer",
@@ -57,14 +35,14 @@ window.SkillPathData = (function () {
       ],
     },
     other: {
-      label: "What best describes your current focus?",
-      placeholder: "Select your current background",
+      label: "What best describes your onboarding focus?",
+      placeholder: "Select your current focus",
       choices: [
-        "Recent Graduate / Job Seeker",
-        "Self-Taught Learner",
-        "Freelancer / Independent Consultant",
-        "Researcher / Academic",
-        "Career Transitioner",
+        "New Joiner (Non-Tech Background)",
+        "Career Switcher",
+        "Internal Team Transfer",
+        "Independent / Contract Learner",
+        "Returning to Workforce",
       ],
     },
   };
@@ -220,7 +198,9 @@ window.SkillPathData = (function () {
   const DEMO_EMPLOYEE_PROFILE = {
     name: "Jordan Patel",
     isDemo: true,
+    userType: "employee",
     status: "employee",
+    previousField: "",
     backgroundDetail: "Data Analyst",
     targetRole: "junior_data_analyst",
     companyPriority: "Dashboards",
@@ -1457,6 +1437,7 @@ window.SkillPathData = (function () {
     {
       id: "emp_maya",
       name: "Maya Lin",
+      userType: "employee",
       team: "Analytics & BI",
       targetRole: "junior_data_analyst",
       companyPriority: "Dashboards",
@@ -1496,6 +1477,8 @@ window.SkillPathData = (function () {
     {
       id: "emp_ethan",
       name: "Ethan Reed",
+      userType: "other",
+      previousField: "Retail Operations",
       team: "Analytics & BI",
       targetRole: "junior_data_analyst",
       companyPriority: "Dashboards",
@@ -1687,6 +1670,8 @@ window.SkillPathData = (function () {
     {
       id: "emp_noah",
       name: "Noah Brooks",
+      userType: "other",
+      previousField: "Banking",
       team: "Security Ops",
       targetRole: "cybersecurity_analyst",
       companyPriority: "Cybersecurity",

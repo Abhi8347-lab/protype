@@ -119,8 +119,21 @@
     const prioritySuffix = analysis.activePriorities.length
       ? ` · Company priority: ${analysis.activePriorities.join(", ")}`
       : "";
+    const isOther = (profile.userType || profile.status) === "other";
+    const bgParts = [];
+    if (isOther) {
+      bgParts.push(
+        profile.previousField
+          ? `New joiner / Other (Previous field: ${profile.previousField})`
+          : "New joiner / Other"
+      );
+    }
+    if (profile.backgroundDetail) {
+      bgParts.push(profile.backgroundDetail);
+    }
+    const bgLabel = bgParts.length > 0 ? bgParts.join(" · ") : "Employee";
     document.getElementById("analyzer-subtitle").textContent =
-      `${profile.backgroundDetail || "Learner"} aiming for ${analysis.role.name}${prioritySuffix}`;
+      `${bgLabel} aiming for ${analysis.role.name}${prioritySuffix}`;
 
     // Overall Progress Bar
     document.getElementById("overall-progress-headline").textContent =

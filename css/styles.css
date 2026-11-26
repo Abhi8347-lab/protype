@@ -1,5 +1,5 @@
 /* ==========================================================================
-   SkillPath AI — Clean, Modern, Card-Based Design System
+   SkillSync AI — Clean, Modern, Card-Based Design System
    ========================================================================== */
 
 :root {
@@ -543,6 +543,19 @@ select:focus-visible {
 
 .req {
   color: var(--missing-fg);
+}
+
+.optional-label {
+  font-weight: 500;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.field-helper {
+  margin: 7px 0 0;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .text-input,
@@ -3558,6 +3571,35 @@ select:focus-visible {
 .emp-status-pill.status-at-risk {
   background: var(--missing-bg);
   color: var(--missing-fg);
+}
+
+.row-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.user-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.71rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.type-badge-employee {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border: 1px solid #c7d2fe;
+}
+
+.type-badge-other {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-border);
 }
 
 .gate-status-wrap {
