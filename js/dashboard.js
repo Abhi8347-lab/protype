@@ -10,7 +10,8 @@
   const { escapeHtml } = Nav;
 
   let appState = await Storage.initState();
-  let selectedEmployeeId = null;
+  const urlParams = new URLSearchParams(window.location.search);
+  let selectedEmployeeId = urlParams.get("employee") || null;
   let sortCol = "completionPct";
   let sortDir = "asc";
   let searchQuery = "";
@@ -18,10 +19,14 @@
   let roleFilter = "all";
   let levelFilter = "all";
   let statusFilter = "all";
+  let certFilter = "all";
+  const toastedNotifIds = new Set();
 
   const guardEl = document.getElementById("dashboard-guard");
   const contentEl = document.getElementById("dashboard-content");
   const anonymiseToggle = document.getElementById("toggle-anonymise");
+  const hrCertNotifsWrap = document.getElementById("hr-cert-notifs-wrap");
+  const hrCertNotifsToggle = document.getElementById("toggle-hr-cert-notifs");
   const hrOnlySection = document.getElementById("hr-only-section");
 
   function isHrView() {
@@ -67,6 +72,8 @@
       if (roleFilter !== "all" && emp.roleId !== roleFilter) return false;
       if (levelFilter !== "all" && emp.avgLevel !== levelFilter) return false;
       if (statusFilter !== "all" && emp.status !== statusFilter) return false;
+      if (certFilter === "has" && Number(emp.certCount || 0) === 0) return false;
+      if (certFilter === "none" && Number(emp.certCount || 0) > 0) return false;
       return true;
     });
 
@@ -101,6 +108,23 @@
     const fallingBehind = employees.filter(
       (e) => e.status === "Behind" || e.status === "At risk"
     ).length;
+    const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+    const totalCerts = employees.reduce(
+      (s, e) => s + Number(e.certCount || 0),
+      0
+    );
+    const verifiedCerts = employees.reduce(
+      (s, e) => s + Number(e.verifiedCertCount || 0),
+      0
+    );
+    const certsThisMonth = employees.reduce(
+      (s, e) =>
+        s +
+        (e.certifications || []).filter((c) =>
+          String(c.completedOn || "").startsWith(currentMonthPrefix)
+        ).length,
+      0
+    );
 
     const dist = { Beginner: 0, Intermediate: 0, Expert: 0, Unverified: 0 };
     employees.forEach((emp) => {
@@ -124,19 +148,19 @@
         <span class="kpi-sub">Active upskilling tracks</span>
       </article>
       <article class="card kpi-card">
+        <span class="kpi-label">Total certifications completed</span>
+        <span class="kpi-value">${totalCerts}</span>
+        <span class="kpi-sub">${certsThisMonth} this month · ${verifiedCerts} verified</span>
+      </article>
+      <article class="card kpi-card">
         <span class="kpi-label">Verified Skills</span>
         <span class="kpi-value">${totalVerifiedSkills}</span>
         <span class="kpi-sub">${employees.filter((e) => e.verifiedCount > 0).length} of ${total} tested</span>
       </article>
       <article class="card kpi-card">
-        <span class="kpi-label">Level Distribution</span>
-        <span class="kpi-value">${dist.Expert}E · ${dist.Intermediate}I · ${dist.Beginner}B</span>
-        <span class="kpi-sub">${dist.Unverified} unverified skills</span>
-      </article>
-      <article class="card kpi-card">
         <span class="kpi-label">Falling Behind</span>
         <span class="kpi-value ${fallingBehind > 0 ? "kpi-alert" : ""}">${fallingBehind}</span>
-        <span class="kpi-sub">Behind or At risk status</span>
+        <span class="kpi-sub">Behind or At risk · ${dist.Expert}E ${dist.Intermediate}I ${dist.Beginner}B</span>
       </article>
     `;
 
@@ -146,6 +170,10 @@
     );
     Chart.renderEmployeeCompletionBarChart(
       document.getElementById("chart-emp-completion"),
+      employees
+    );
+    Chart.renderCertificationProgressBarChart(
+      document.getElementById("chart-cert-progress"),
       employees
     );
   }
@@ -424,6 +452,7 @@
       { id: "verifiedCount", label: "Verified Skills" },
       { id: "avgLevel", label: "Avg Level" },
       { id: "completionPct", label: "Completion %" },
+      { id: "certCount", label: "Certifications completed" },
       { id: "lastTestDate", label: "Last Test Date" },
       { id: "gateStatus", label: "Diagnostic Gate" },
       { id: "status", label: "Status" },
@@ -443,7 +472,7 @@
 
     const tbody =
       filteredEmployees.length === 0
-        ? `<tr><td colspan="9" class="table-empty-cell">No employees match the current filters.</td></tr>`
+        ? `<tr><td colspan="10" class="table-empty-cell">No employees match the current filters.</td></tr>`
         : filteredEmployees
             .map((emp) => {
               const statusSlug = emp.status.toLowerCase().replace(/\s+/g, "-");
@@ -457,6 +486,13 @@
               const typeTooltip =
                 emp.userType === "other" && emp.previousField
                   ? `title="Previous field: ${escapeHtml(emp.previousField)}"`
+                  : "";
+              const certCount = Number(emp.certCount || 0);
+              const verifiedCertCount = Number(emp.verifiedCertCount || 0);
+              const certTooltip = `${certCount} completed (${verifiedCertCount} verified)`;
+              const verifiedCertBadge =
+                verifiedCertCount > 0
+                  ? `<span class="cert-verified-pill">Verified (${verifiedCertCount})</span>`
                   : "";
 
               return `
@@ -473,6 +509,12 @@
                   <td><strong>${emp.gateVerifiedCount || 0}/${emp.gateRequiredCount || 0}</strong> <span class="muted-note">(${emp.verifiedCount} total)</span></td>
                   <td><span class="ver-mini-pill level-${emp.avgLevel.toLowerCase()}">${escapeHtml(emp.avgLevel)}</span></td>
                   <td><strong>${emp.completionPct}%</strong></td>
+                  <td>
+                    <div class="cert-table-cell" title="${escapeHtml(certTooltip)}">
+                      <span class="cert-count-chip">${Nav.certRibbonSvg()}<strong>${certCount}</strong></span>
+                      ${verifiedCertBadge}
+                    </div>
+                  </td>
                   <td>${escapeHtml(emp.lastTestDate)}</td>
                   <td>${gateTag}</td>
                   <td><span class="emp-status-pill status-${statusSlug}">${escapeHtml(emp.status)}</span></td>
@@ -690,7 +732,10 @@
         .map(
           (c) => `
           <div class="detail-course-row">
-            <span>${escapeHtml(c.title)}</span>
+            <span class="detail-course-title-wrap">
+              <span>${escapeHtml(c.title)}</span>
+              ${Nav.certBadgeHtml(c, { showName: false })}
+            </span>
             <span class="status-pill status-${c.status === "completed" ? "strong" : c.status === "in_progress" ? "needs_improvement" : "missing"}">
               ${escapeHtml(c.status.replace("_", " "))}
             </span>
@@ -700,6 +745,63 @@
         .join("");
 
       planMount.innerHTML = `${planHtml}<div class="detail-course-list">${coursesHtml}</div>`;
+    }
+
+    // Certifications list with Verify action
+    const certsMount = document.getElementById("detail-certifications-list");
+    if (certsMount) {
+      const empCerts = emp.certifications || [];
+      if (empCerts.length === 0) {
+        certsMount.innerHTML = `<p class="muted-note">No certifications completed yet for this employee.</p>`;
+      } else {
+        const allCatalogCourses = Object.values(Data.COURSES_BY_SKILL || {}).flat();
+        certsMount.innerHTML = `
+          <div class="detail-certs-list">
+            ${empCerts
+              .map((cert) => {
+                const courseMeta = allCatalogCourses.find(
+                  (c) => c.id === cert.courseId
+                );
+                const courseTitle = courseMeta ? courseMeta.title : cert.courseId;
+                const isUrl = /^https?:\/\//i.test(String(cert.certId || ""));
+                const certIdHtml = isUrl
+                  ? `<a href="${escapeHtml(cert.certId)}" target="_blank" rel="noopener noreferrer" class="cert-id-link">${escapeHtml(cert.certId)} ↗</a>`
+                  : `<code class="cert-id-code">${escapeHtml(cert.certId)}</code>`;
+                const isVerified = cert.status === "verified";
+                const statusBadge = isVerified
+                  ? `<span class="cert-verified-pill">✓ Verified</span>`
+                  : `<span class="cert-pending-pill">Pending review</span>`;
+                const verifyBtn = !isVerified
+                  ? `<button type="button" class="btn-xs btn-verify-cert" data-verify-emp="${escapeHtml(emp.id)}" data-verify-course="${escapeHtml(cert.courseId)}">Verify</button>`
+                  : "";
+
+                return `
+                  <div class="detail-cert-row">
+                    <div class="detail-cert-main">
+                      <div class="detail-cert-title">${Nav.certRibbonSvg()} <strong>${escapeHtml(cert.certificationName)}</strong></div>
+                      <div class="muted-note">Course: ${escapeHtml(courseTitle)} · Completed: ${escapeHtml(cert.completedOn || "—")} · ID/Link: ${certIdHtml}</div>
+                    </div>
+                    <div class="detail-cert-actions">
+                      ${statusBadge}
+                      ${verifyBtn}
+                    </div>
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+
+        certsMount.querySelectorAll("[data-verify-course]").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const empId = btn.getAttribute("data-verify-emp");
+            const courseId = btn.getAttribute("data-verify-course");
+            appState = await Storage.verifyCertification(empId, courseId);
+            Nav.showToast("Certification marked as Verified ✓.", "success");
+            renderAll();
+          });
+        });
+      }
     }
 
     // Re-plan history
@@ -721,6 +823,31 @@
           `
             )
             .join("");
+  }
+
+  function renderNotifyActivityLog() {
+    const mount = document.getElementById("dash-notify-log");
+    if (!mount) return;
+    const logs = appState.agentActivityLog || [];
+    if (logs.length === 0) {
+      mount.innerHTML = `<p class="muted-note">No Notify Tool events yet. When an employee completes a certified course, an alert is logged here.</p>`;
+      return;
+    }
+
+    mount.innerHTML = logs
+      .slice(0, 10)
+      .map(
+        (entry) => `
+      <div class="replan-entry">
+        <div class="replan-entry-top">
+          <strong>${escapeHtml(entry.tool || "Notify Tool")}</strong>
+          <span class="replan-date">${escapeHtml(String(entry.createdAt || "").slice(0, 16).replace("T", " "))}</span>
+        </div>
+        <p>${escapeHtml(entry.message)}</p>
+      </div>
+    `
+      )
+      .join("");
   }
 
   function renderNudgeLog() {
@@ -758,6 +885,9 @@
       "Diagnostic Gate",
       "Average Level",
       "Course Completion %",
+      "Certifications Completed",
+      "Certifications Verified",
+      "Certifications",
       "Last Test Date",
       "Status",
     ];
@@ -769,8 +899,14 @@
 
     const lines = [
       headers.map(csvEscape).join(","),
-      ...rows.map((r) =>
-        [
+      ...rows.map((r) => {
+        const certSummary = (r.certifications || [])
+          .map(
+            (c) =>
+              `${c.certificationName} (${c.certId || "no-id"} · ${c.status})`
+          )
+          .join("; ");
+        return [
           r.displayName,
           r.userTypeLabel || (r.userType === "other" ? "New joiner / Other" : "Employee"),
           r.team,
@@ -780,12 +916,15 @@
           r.gateStatusLabel || "Not started",
           r.avgLevel,
           r.completionPct,
+          r.certCount || 0,
+          r.verifiedCertCount || 0,
+          certSummary || "None",
           r.lastTestDate,
           r.status,
         ]
           .map(csvEscape)
-          .join(",")
-      ),
+          .join(",");
+      }),
     ];
 
     const blob = new Blob([lines.join("\n")], {
@@ -812,11 +951,39 @@
     renderAll();
   }
 
+  function toastUnreadManagerCertNotifications() {
+    if (appState.activeRole === "employee") return;
+    const hrEnabled = appState.hrCertNotifications !== false;
+    const unreadCerts = (appState.notifications || []).filter(
+      (n) =>
+        !n.read &&
+        n.type === "certification_completed" &&
+        Storage.isNotificationForRole(n, appState.activeRole, hrEnabled) &&
+        !toastedNotifIds.has(n.id)
+    );
+    if (unreadCerts.length > 0) {
+      const newest = unreadCerts[0];
+      unreadCerts.forEach((n) => toastedNotifIds.add(n.id));
+      Nav.showToast(Engine.formatNotificationMessage(newest, appState), "success");
+    }
+  }
+
+  function handleSelectEmployeeFromNotif(empId, updatedState) {
+    if (updatedState) appState = updatedState;
+    selectedEmployeeId = empId;
+    renderAll();
+    const card = document.getElementById("employee-detail-card");
+    if (card && typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   function renderAll() {
     Nav.render({
       activePage: "dashboard",
       state: appState,
       onRoleChange: handleRoleSwitch,
+      onSelectEmployee: handleSelectEmployeeFromNotif,
     });
 
     if (appState.activeRole === "employee") {
@@ -827,6 +994,11 @@
 
     guardEl.hidden = true;
     contentEl.hidden = false;
+
+    if (hrCertNotifsWrap && hrCertNotifsToggle) {
+      hrCertNotifsWrap.hidden = !isHrView();
+      hrCertNotifsToggle.checked = appState.hrCertNotifications !== false;
+    }
 
     document.getElementById("dash-role-badge").textContent = isHrView()
       ? "HR Organization View"
@@ -847,7 +1019,9 @@
     renderHeatmap(employees);
     renderPerformanceTable(filtered);
     renderDetailPanel(employees);
+    renderNotifyActivityLog();
     renderNudgeLog();
+    toastUnreadManagerCertNotifications();
   }
 
   // Event Listeners
@@ -883,6 +1057,23 @@
 
   document.getElementById("dash-filter-status").addEventListener("change", (e) => {
     statusFilter = e.target.value;
+    renderAll();
+  });
+
+  document.getElementById("dash-filter-certs").addEventListener("change", (e) => {
+    certFilter = e.target.value;
+    renderAll();
+  });
+
+  if (hrCertNotifsToggle) {
+    hrCertNotifsToggle.addEventListener("change", async (e) => {
+      appState = await Storage.setHrCertNotifications(Boolean(e.target.checked));
+      renderAll();
+    });
+  }
+
+  window.addEventListener("storage", () => {
+    appState = Storage.readLocal();
     renderAll();
   });
 

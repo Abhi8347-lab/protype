@@ -406,11 +406,71 @@ window.SkillPathChart = (function () {
     `;
   }
 
+  /**
+   * Inline SVG Horizontal Bar Chart showing certifications earned vs certified courses in plan per employee.
+   */
+  function renderCertificationProgressBarChart(container, employees) {
+    if (!container) return;
+    const rows = (employees || []).slice(0, 10);
+    if (rows.length === 0) {
+      container.innerHTML = `<div class="chart-empty-note">No employee certification data available.</div>`;
+      return;
+    }
+
+    const rowHeight = 28;
+    const width = 500;
+    const height = Math.max(120, rows.length * rowHeight + 28);
+    const labelWidth = 148;
+    const barMaxWidth = 265;
+
+    const barsHtml = rows
+      .map((emp, idx) => {
+        const y = 16 + idx * rowHeight;
+        const earned = Number(emp.certCount || 0);
+        const total = Math.max(1, Number(emp.certifiedCoursesInPlan || 0));
+        const ratio = Math.min(1, earned / total);
+        const barW = earned > 0 ? Math.max(6, ratio * barMaxWidth) : 0;
+        const fill =
+          earned >= total && earned > 0
+            ? "#10b981"
+            : earned > 0
+              ? "#4f46e5"
+              : "#cbd5e1";
+        const shortName =
+          emp.displayName.length > 18
+            ? `${emp.displayName.slice(0, 17)}…`
+            : emp.displayName;
+
+        return `
+          <g>
+            <text x="${labelWidth - 10}" y="${y + 13}" text-anchor="end" class="svg-label-text">${escapeHtml(shortName)}</text>
+            <rect x="${labelWidth}" y="${y + 2}" width="${barMaxWidth}" height="14" rx="7" class="svg-bar-track" />
+            ${
+              barW > 0
+                ? `<rect x="${labelWidth}" y="${y + 2}" width="${barW.toFixed(1)}" height="14" rx="7" fill="${fill}">
+                    <title>${escapeHtml(emp.displayName)}: ${earned} of ${emp.certifiedCoursesInPlan || 0} certified courses (${emp.verifiedCertCount || 0} verified)</title>
+                  </rect>`
+                : ""
+            }
+            <text x="${labelWidth + barMaxWidth + 10}" y="${y + 13}" class="svg-value-text">${earned}/${emp.certifiedCoursesInPlan || 0}</text>
+          </g>
+        `;
+      })
+      .join("");
+
+    container.innerHTML = `
+      <svg viewBox="0 0 ${width} ${height}" class="dash-svg-chart" role="img" aria-label="Certification progress by employee">
+        ${barsHtml}
+      </svg>
+    `;
+  }
+
   return {
     renderRadarChart,
     renderBarChart,
     renderLevelDistributionBarChart,
     renderEmployeeCompletionBarChart,
+    renderCertificationProgressBarChart,
     renderScoreTrendLineChart,
   };
 })();

@@ -52,22 +52,76 @@ window.SkillPathStorage = (function () {
         : [{ skillId: "power_bi", weight: 5 }];
 
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       activeRole: "employee",
       currentEmployeeId: CURRENT_EMP_ID,
       anonymiseHR: true,
+      certRankingBonus: false,
+      hrCertNotifications: true,
       profile: null,
       courseProgress: {},
+      certifications: {},
       testResults: {},
       verifiedLevels: {},
       notifications: [],
       nudges: [],
+      agentActivityLog: [],
       priorities: defaultPriorities,
       replanHistory: [],
       updatedAt: null,
       gate: { required: [], completed: [], cleared: false, clearedAt: null },
       inProgress: null,
     };
+  }
+
+  function sanitizeCertificationsMap(rawMap) {
+    if (!rawMap || typeof rawMap !== "object") return {};
+    const clean = {};
+    Object.entries(rawMap).forEach(([empId, list]) => {
+      if (!Array.isArray(list)) return;
+      const seen = new Map();
+      list.forEach((item) => {
+        if (!item || typeof item !== "object" || !item.courseId) return;
+        const cid = String(item.courseId);
+        seen.set(cid, {
+          courseId: cid,
+          certificationName: String(item.certificationName || ""),
+          certId: String(item.certId || ""),
+          completedOn: String(
+            item.completedOn || new Date().toISOString().slice(0, 10)
+          ),
+          status: item.status === "verified" ? "verified" : "pending_review",
+        });
+      });
+      clean[empId] = Array.from(seen.values());
+    });
+    return clean;
+  }
+
+  function sanitizeNotificationsList(rawList) {
+    if (!Array.isArray(rawList)) return [];
+    return rawList
+      .filter((n) => n && typeof n === "object" && n.message)
+      .map((n, idx) => ({
+        id: String(n.id || `notif_${idx}_${Date.now()}`),
+        type: String(n.type || "nudge"),
+        audience:
+          n.audience ||
+          (n.type === "certification_completed" ? "manager" : "employee"),
+        notifyHR: typeof n.notifyHR === "boolean" ? n.notifyHR : true,
+        employeeId: String(n.employeeId || CURRENT_EMP_ID),
+        employeeName: String(n.employeeName || ""),
+        senderRole: n.senderRole ? String(n.senderRole) : undefined,
+        courseId: n.courseId ? String(n.courseId) : undefined,
+        courseTitle: n.courseTitle ? String(n.courseTitle) : undefined,
+        certificationName: n.certificationName
+          ? String(n.certificationName)
+          : undefined,
+        completedOn: n.completedOn ? String(n.completedOn) : undefined,
+        message: String(n.message),
+        createdAt: String(n.createdAt || new Date().toISOString()),
+        read: Boolean(n.read),
+      }));
   }
 
   function migrateState(parsed) {
@@ -138,16 +192,25 @@ window.SkillPathStorage = (function () {
         : null;
 
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       activeRole,
       currentEmployeeId: parsed.currentEmployeeId || CURRENT_EMP_ID,
       anonymiseHR:
         typeof parsed.anonymiseHR === "boolean" ? parsed.anonymiseHR : true,
+      certRankingBonus:
+        typeof parsed.certRankingBonus === "boolean"
+          ? parsed.certRankingBonus
+          : false,
+      hrCertNotifications:
+        typeof parsed.hrCertNotifications === "boolean"
+          ? parsed.hrCertNotifications
+          : true,
       profile: profileObj,
       courseProgress:
         parsed.courseProgress && typeof parsed.courseProgress === "object"
           ? parsed.courseProgress
           : {},
+      certifications: sanitizeCertificationsMap(parsed.certifications),
       testResults:
         parsed.testResults && typeof parsed.testResults === "object"
           ? parsed.testResults
@@ -156,10 +219,11 @@ window.SkillPathStorage = (function () {
         parsed.verifiedLevels && typeof parsed.verifiedLevels === "object"
           ? parsed.verifiedLevels
           : {},
-      notifications: Array.isArray(parsed.notifications)
-        ? parsed.notifications
-        : [],
+      notifications: sanitizeNotificationsList(parsed.notifications),
       nudges: Array.isArray(parsed.nudges) ? parsed.nudges : [],
+      agentActivityLog: Array.isArray(parsed.agentActivityLog)
+        ? parsed.agentActivityLog
+        : [],
       priorities: Array.isArray(parsed.priorities)
         ? parsed.priorities
         : base.priorities,
@@ -202,7 +266,7 @@ window.SkillPathStorage = (function () {
         needsMigrationSave ||
         profileMigration.changed ||
         !parsed.schemaVersion ||
-        parsed.schemaVersion < 3
+        parsed.schemaVersion < 4
       ) {
         writeLocal(migrated);
       }
@@ -342,6 +406,255 @@ window.SkillPathStorage = (function () {
     });
   }
 
+  async function setCertRankingBonus(value) {
+    const local = readLocal();
+    return writeLocal({
+      ...local,
+      certRankingBonus: Boolean(value),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async function setHrCertNotifications(value) {
+    const local = readLocal();
+    return writeLocal({
+      ...local,
+      hrCertNotifications: Boolean(value),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  function findCourseMeta(courseId) {
+    const bySkill = window.SkillPathData?.COURSES_BY_SKILL || {};
+    const all = Object.values(bySkill).flat();
+    return all.find((c) => c.id === courseId) || null;
+  }
+
+  function formatPrettyDate(isoDate) {
+    const str = String(isoDate || new Date().toISOString().slice(0, 10)).slice(
+      0,
+      10
+    );
+    const parts = str.split("-");
+    if (parts.length !== 3) return str;
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const year = parts[0];
+    const monthIdx = Math.max(0, Math.min(11, Number(parts[1]) - 1));
+    const day = Number(parts[2]);
+    return `${day} ${months[monthIdx]} ${year}`;
+  }
+
+  /**
+   * Return deduplicated certifications for a given employee (including seeded demo data
+   * if not yet overridden in state.certifications).
+   */
+  function getCertifications(employeeId, stateOverride) {
+    const state = stateOverride || readLocal();
+    const empId = employeeId || state.currentEmployeeId || CURRENT_EMP_ID;
+    const map = state.certifications || {};
+    if (Array.isArray(map[empId])) {
+      return map[empId].map((c) => ({ ...c }));
+    }
+    const seed = (window.SkillPathData?.SEED_EMPLOYEES || []).find(
+      (e) => e.id === empId
+    );
+    if (seed && Array.isArray(seed.certifications)) {
+      return seed.certifications.map((c) => ({ ...c }));
+    }
+    return [];
+  }
+
+  function getCertificationCount(employeeId, stateOverride) {
+    return getCertifications(employeeId, stateOverride).length;
+  }
+
+  function getVerifiedCertificationCount(employeeId, stateOverride) {
+    return getCertifications(employeeId, stateOverride).filter(
+      (c) => c.status === "verified"
+    ).length;
+  }
+
+  /**
+   * Add or update an employee certification record.
+   * Deduplicates by courseId so resetting and re-completing updates the existing record.
+   */
+  async function addCertification({
+    employeeId,
+    courseId,
+    certificationName,
+    certId,
+    completedOn,
+    status = "pending_review",
+  }) {
+    if (!courseId) {
+      throw new Error("Course ID is required to record a certification.");
+    }
+    const cleanCertId = String(certId || "").trim();
+    if (!cleanCertId) {
+      throw new Error("Certificate ID or link is required.");
+    }
+
+    const local = readLocal();
+    const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
+    const courseMeta = findCourseMeta(courseId);
+    const cleanName = String(
+      certificationName ||
+        courseMeta?.certificationName ||
+        courseMeta?.title ||
+        courseId
+    ).trim();
+    const cleanDate = String(
+      completedOn || new Date().toISOString().slice(0, 10)
+    ).slice(0, 10);
+    const cleanStatus = status === "verified" ? "verified" : "pending_review";
+
+    const existingList = getCertifications(empId, local);
+    const existingIdx = existingList.findIndex((c) => c.courseId === courseId);
+    const record = {
+      courseId: String(courseId),
+      certificationName: cleanName,
+      certId: cleanCertId,
+      completedOn: cleanDate,
+      status: cleanStatus,
+    };
+
+    if (existingIdx >= 0) {
+      existingList[existingIdx] = record;
+    } else {
+      existingList.push(record);
+    }
+
+    const nextCerts = {
+      ...(local.certifications || {}),
+      [empId]: existingList,
+    };
+
+    return writeLocal({
+      ...local,
+      certifications: nextCerts,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async function verifyCertification(employeeId, courseId) {
+    const local = readLocal();
+    const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
+    const existingList = getCertifications(empId, local);
+    const idx = existingList.findIndex((c) => c.courseId === courseId);
+    if (idx < 0) return local;
+
+    existingList[idx] = {
+      ...existingList[idx],
+      status: "verified",
+    };
+
+    const nextCerts = {
+      ...(local.certifications || {}),
+      [empId]: existingList,
+    };
+
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      tool: "Notify Tool",
+      message: `[Notify Tool] Manager verified certification "${existingList[idx].certificationName}" (${existingList[idx].certId}).`,
+      createdAt: timestamp,
+    };
+
+    return writeLocal({
+      ...local,
+      certifications: nextCerts,
+      agentActivityLog: [logEntry, ...(local.agentActivityLog || [])].slice(
+        0,
+        40
+      ),
+      updatedAt: timestamp,
+    });
+  }
+
+  /**
+   * Create a manager (and optional HR) notification when an employee completes a certified course,
+   * and log the simulated [Notify Tool] event in agentActivityLog.
+   */
+  async function notifyManager({
+    employeeId,
+    employeeName,
+    courseId,
+    courseTitle,
+    certificationName,
+    completedOn,
+  }) {
+    const local = readLocal();
+    const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
+    const empName = String(
+      employeeName || local.profile?.name || "Current Employee"
+    ).trim();
+    const courseMeta = courseId ? findCourseMeta(courseId) : null;
+    const resolvedCourseTitle = String(
+      courseTitle || courseMeta?.title || courseId || "Course"
+    );
+    const resolvedCertName = String(
+      certificationName ||
+        courseMeta?.certificationName ||
+        `${resolvedCourseTitle} Certificate`
+    );
+    const dateIso = String(
+      completedOn || new Date().toISOString().slice(0, 10)
+    ).slice(0, 10);
+    const prettyDate = formatPrettyDate(dateIso);
+    const timestamp = new Date().toISOString();
+    const id = `cert_notif_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const hrEnabled = local.hrCertNotifications !== false;
+
+    const message = `${empName} completed the certification ${resolvedCertName} (${resolvedCourseTitle}) on ${prettyDate}.`;
+
+    const notification = {
+      id,
+      type: "certification_completed",
+      audience: "manager",
+      notifyHR: hrEnabled,
+      employeeId: empId,
+      employeeName: empName,
+      courseId: courseId ? String(courseId) : undefined,
+      courseTitle: resolvedCourseTitle,
+      certificationName: resolvedCertName,
+      completedOn: dateIso,
+      message,
+      createdAt: timestamp,
+      read: false,
+    };
+
+    const logEntry = {
+      id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      tool: "Notify Tool",
+      message: `[Notify Tool] Certification alert sent to manager${hrEnabled ? " & HR" : ""}: ${resolvedCertName} (${resolvedCourseTitle}).`,
+      createdAt: timestamp,
+    };
+
+    return writeLocal({
+      ...local,
+      notifications: [notification, ...(local.notifications || [])].slice(0, 50),
+      agentActivityLog: [logEntry, ...(local.agentActivityLog || [])].slice(
+        0,
+        40
+      ),
+      updatedAt: timestamp,
+    });
+  }
+
   async function recordTestAttempt(employeeId, skillId, attemptRecord) {
     const local = readLocal();
     const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
@@ -462,12 +775,43 @@ window.SkillPathStorage = (function () {
     });
   }
 
-  async function markNotificationsRead() {
+  function isNotificationForRole(notif, activeRole, hrEnabled = true) {
+    if (!notif) return false;
+    if (activeRole === "manager") {
+      return notif.audience === "manager" || notif.type === "certification_completed";
+    }
+    if (activeRole === "hr") {
+      return (
+        notif.audience === "hr" ||
+        (notif.type === "certification_completed" &&
+          hrEnabled &&
+          notif.notifyHR !== false)
+      );
+    }
+    return notif.audience !== "manager" && notif.type !== "certification_completed";
+  }
+
+  async function markNotificationRead(notifId) {
     const local = readLocal();
-    const notifications = (local.notifications || []).map((n) => ({
-      ...n,
-      read: true,
-    }));
+    const notifications = (local.notifications || []).map((n) =>
+      n.id === notifId ? { ...n, read: true } : n
+    );
+    return writeLocal({
+      ...local,
+      notifications,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async function markNotificationsRead(activeRole) {
+    const local = readLocal();
+    const role = activeRole || local.activeRole || "employee";
+    const hrEnabled = local.hrCertNotifications !== false;
+    const notifications = (local.notifications || []).map((n) =>
+      !activeRole || isNotificationForRole(n, role, hrEnabled)
+        ? { ...n, read: true }
+        : n
+    );
     return writeLocal({
       ...local,
       notifications,
@@ -581,9 +925,20 @@ window.SkillPathStorage = (function () {
     setCourseStatus,
     setActiveRole,
     setAnonymiseHR,
+    setCertRankingBonus,
+    setHrCertNotifications,
+    getCertifications,
+    getCertificationCount,
+    getVerifiedCertificationCount,
+    addCertification,
+    verifyCertification,
+    notifyManager,
+    formatPrettyDate,
+    isNotificationForRole,
     recordTestAttempt,
     addReplanEntry,
     addNudge,
+    markNotificationRead,
     markNotificationsRead,
     savePriorities,
     resetState,

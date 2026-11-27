@@ -87,11 +87,13 @@ window.SkillPathEngine = (function () {
     skillId,
     baselinePct,
     requiredPct,
-    courseProgress
+    courseProgress,
+    certRankingBonus = false
   ) {
     const allCourses = window.SkillPathData.COURSES_BY_SKILL[skillId] || [];
     if (allCourses.length === 0) return [];
 
+    let selected;
     if (baselinePct >= 50 && baselinePct < requiredPct) {
       const targeted = allCourses.filter(
         (c) =>
@@ -100,13 +102,21 @@ window.SkillPathEngine = (function () {
             courseProgress[c.id] &&
             courseProgress[c.id] !== "not_started")
       );
-      if (targeted.length > 0) return targeted;
+      selected = targeted.length > 0 ? targeted : allCourses.slice();
+    } else {
+      selected = allCourses.slice();
     }
 
-    return allCourses.slice();
+    if (certRankingBonus) {
+      return selected
+        .slice()
+        .sort((a, b) => Number(Boolean(b.hasCertification)) - Number(Boolean(a.hasCertification)));
+    }
+
+    return selected;
   }
 
-  function buildWhyThisCourse(course, skillItem, profile) {
+  function buildWhyThisCourse(course, skillItem, profile, certRankingBonus = false) {
     const priorities = getActivePriorities(profile);
     const priorityText = priorities.join(", ");
     const roleName =
@@ -123,17 +133,22 @@ window.SkillPathEngine = (function () {
         ? ` Since you are moving from ${prevField} (a non-tech background), this starts from fundamentals.`
         : " Since you are moving from a non-tech background, this starts from fundamentals."
       : "";
+    const certNote = course.hasCertification
+      ? certRankingBonus
+        ? ` Includes ${course.certificationName} (boosted by certification ranking bonus).`
+        : ` Includes ${course.certificationName}.`
+      : "";
 
     const scoreSourceText = skillItem.isVerified
       ? `verified ${skillItem.verifiedLevel} (${skillItem.baselinePct}%)`
       : `${skillItem.baselinePct}%`;
 
     if (skillItem.baselinePct >= skillItem.requiredPct) {
-      return `Optional refresher: your ${skillItem.skillName} score is already ${scoreSourceText} (target ${skillItem.requiredPct}% for ${roleName}).`;
+      return `Optional refresher: your ${skillItem.skillName} score is already ${scoreSourceText} (target ${skillItem.requiredPct}% for ${roleName}).${certNote}`;
     }
 
     if (course.isCapstone) {
-      return `Recommended as your Week 6 capstone to apply your SQL (${resolveInitialPct(profile, "sql")}%) and ${skillItem.skillName} (${scoreSourceText}) to a real ${priorityText || "executive"} dashboard.${nonTechNote}`;
+      return `Recommended as your Week 6 capstone to apply your SQL (${resolveInitialPct(profile, "sql")}%) and ${skillItem.skillName} (${scoreSourceText}) to a real ${priorityText || "executive"} dashboard.${nonTechNote}${certNote}`;
     }
 
     if (skillItem.isPriorityMatch) {
@@ -141,10 +156,10 @@ window.SkillPathEngine = (function () {
         skillItem.matchedPriorities[0] ||
         priorityText ||
         "organization priority";
-      return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%) and ${pLabel} is a current company priority.${nonTechNote}`;
+      return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%) and ${pLabel} is a current company priority.${nonTechNote}${certNote}`;
     }
 
-    return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%), closing a ${skillItem.requiredPct - skillItem.baselinePct}% gap needed for ${roleName}.${nonTechNote}`;
+    return `Recommended because your ${skillItem.skillName} score is ${scoreSourceText} (target ${skillItem.requiredPct}%), closing a ${skillItem.requiredPct - skillItem.baselinePct}% gap needed for ${roleName}.${nonTechNote}${certNote}`;
   }
 
   function generateSixWeekPlan(profile, roadmap) {
@@ -340,6 +355,7 @@ window.SkillPathEngine = (function () {
     const hoursOption = getWeeklyHoursOption(profile.weeklyHours);
     const slotsPerWeek = getSlotsPerWeek(profile);
     const activePriorities = getActivePriorities(profile);
+    const certRankingBonus = Boolean(storedState.certRankingBonus);
 
     let totalRequiredPct = 0;
     let totalMatchedPct = 0;
@@ -393,7 +409,8 @@ window.SkillPathEngine = (function () {
         reqSkill.skillId,
         baselinePct,
         requiredPct,
-        progress
+        progress,
+        certRankingBonus
       );
 
       const skillCoursesCompleted = rawCourses.filter(
@@ -476,7 +493,12 @@ window.SkillPathEngine = (function () {
       const recommendedCourses = rawCourses.map((course) => ({
         ...course,
         status: progress[course.id] || "not_started",
-        whyRecommended: buildWhyThisCourse(course, skillItemShell, profile),
+        whyRecommended: buildWhyThisCourse(
+          course,
+          skillItemShell,
+          profile,
+          certRankingBonus
+        ),
       }));
 
       if (includeInCoursePlan) {
@@ -815,6 +837,25 @@ window.SkillPathEngine = (function () {
             ? "In progress"
             : "Not started";
 
+      const storageApi = window.SkillPathStorage;
+      const empCerts = storageApi
+        ? storageApi.getCertifications(emp.id, activeState)
+        : Array.isArray(emp.certifications)
+          ? emp.certifications
+          : [];
+      const verifiedCertCount = empCerts.filter(
+        (c) => c.status === "verified"
+      ).length;
+      const planCertSet = new Set();
+      if (analysis && Array.isArray(analysis.roadmap)) {
+        analysis.roadmap.forEach((step) => {
+          (step.courses || []).forEach((c) => {
+            if (c.hasCertification) planCertSet.add(c.id);
+          });
+        });
+      }
+      empCerts.forEach((c) => planCertSet.add(c.courseId));
+
       return {
         id: emp.id,
         name: emp.name,
@@ -840,6 +881,10 @@ window.SkillPathEngine = (function () {
         gateCleared: gateClearedEmp,
         analysis,
         courseProgress: emp.courseProgress || {},
+        certifications: empCerts,
+        certCount: empCerts.length,
+        verifiedCertCount,
+        certifiedCoursesInPlan: Math.max(empCerts.length, planCertSet.size),
         replanHistory: emp.replanHistory || [],
         spend,
         levelsGained: emp.levelsGained || 1,
@@ -942,6 +987,25 @@ window.SkillPathEngine = (function () {
     const currentTypeLabel =
       currentUserType === "other" ? "New joiner / Other" : "Employee";
 
+    const storageApi = window.SkillPathStorage;
+    const currentCerts = storageApi
+      ? storageApi.getCertifications(currentEmpId, activeState)
+      : Array.isArray(activeState.certifications?.[currentEmpId])
+        ? activeState.certifications[currentEmpId]
+        : [];
+    const currentVerifiedCertCount = currentCerts.filter(
+      (c) => c.status === "verified"
+    ).length;
+    const currentPlanCertSet = new Set();
+    if (currentAnalysis && Array.isArray(currentAnalysis.roadmap)) {
+      currentAnalysis.roadmap.forEach((step) => {
+        (step.courses || []).forEach((c) => {
+          if (c.hasCertification) currentPlanCertSet.add(c.id);
+        });
+      });
+    }
+    currentCerts.forEach((c) => currentPlanCertSet.add(c.courseId));
+
     records.unshift({
       id: currentEmpId,
       name: activeProfile.name || "Current Employee",
@@ -970,6 +1034,13 @@ window.SkillPathEngine = (function () {
       gateCleared: userGateInfo.status === "cleared",
       analysis: currentAnalysis,
       courseProgress: currentProgress,
+      certifications: currentCerts,
+      certCount: currentCerts.length,
+      verifiedCertCount: currentVerifiedCertCount,
+      certifiedCoursesInPlan: Math.max(
+        currentCerts.length,
+        currentPlanCertSet.size
+      ),
       replanHistory: (activeState.replanHistory || []).filter(
         (r) => !r.employeeId || r.employeeId === currentEmpId
       ),
@@ -1107,7 +1178,21 @@ window.SkillPathEngine = (function () {
           companyPriority: (analysis.activePriorities || [])[0] || "",
           userType: profile.userType || profile.status || "employee",
           previousField: profile.previousField || "",
-          courses: flatCourses,
+          certRankingBonus: Boolean(
+            window.SkillPathStorage?.readLocal()?.certRankingBonus
+          ),
+          courses: flatCourses.map((c) => {
+            const full = Object.values(
+              window.SkillPathData.COURSES_BY_SKILL || {}
+            )
+              .flat()
+              .find((x) => x.id === c.courseId);
+            return {
+              ...c,
+              hasCertification: Boolean(full?.hasCertification),
+              certificationName: full?.certificationName || "",
+            };
+          }),
         }),
       });
       if (!resp.ok) {
@@ -1119,6 +1204,40 @@ window.SkillPathEngine = (function () {
     }
   }
 
+  /**
+   * Format notification message, masking real employee names when HR anonymisation is enabled.
+   */
+  function formatNotificationMessage(notif, state) {
+    if (!notif) return "";
+    const activeState = state || {};
+    const isHrAnon =
+      activeState.activeRole === "hr" && Boolean(activeState.anonymiseHR);
+    if (!isHrAnon) {
+      return String(notif.message || "");
+    }
+
+    const dataset = buildOrganizationDataset(activeState);
+    const idx = dataset.findIndex((e) => e.id === notif.employeeId);
+    const padded = String(idx >= 0 ? idx + 1 : 0).padStart(2, "0");
+    const anonLabel = `Employee #${padded}`;
+
+    if (notif.type === "certification_completed" && notif.certificationName) {
+      const prettyDate = window.SkillPathStorage
+        ? window.SkillPathStorage.formatPrettyDate(
+            notif.completedOn || notif.createdAt
+          )
+        : String(notif.completedOn || "").slice(0, 10);
+      const coursePart = notif.courseTitle ? ` (${notif.courseTitle})` : "";
+      return `${anonLabel} completed the certification ${notif.certificationName}${coursePart} on ${prettyDate}.`;
+    }
+
+    const rawMsg = String(notif.message || "");
+    if (notif.employeeName && rawMsg.includes(notif.employeeName)) {
+      return rawMsg.split(notif.employeeName).join(anonLabel);
+    }
+    return rawMsg;
+  }
+
   return {
     LEVEL_TO_PCT,
     getLevel,
@@ -1126,6 +1245,13 @@ window.SkillPathEngine = (function () {
     analyzeProfile,
     buildOrganizationDataset,
     fetchAiExplanations,
+    formatNotificationMessage,
+    getCertificationCount: (...args) =>
+      window.SkillPathStorage.getCertificationCount(...args),
+    addCertification: (...args) =>
+      window.SkillPathStorage.addCertification(...args),
+    notifyManager: (...args) =>
+      window.SkillPathStorage.notifyManager(...args),
     getExperienceOption,
     getWeeklyHoursOption,
     getSlotsPerWeek,

@@ -18,6 +18,25 @@ window.SkillPathNav = (function () {
       .replace(/'/g, "&#39;");
   }
 
+  function certRibbonSvg() {
+    return `<svg class="cert-ribbon-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>`;
+  }
+
+  /**
+   * Shared inline-SVG certification badge for courses across courses.html, analyzer.html, and dashboard.html.
+   */
+  function certBadgeHtml(course, opts = {}) {
+    if (!course || !course.hasCertification) {
+      return `<span class="cert-badge cert-badge-none">No certificate</span>`;
+    }
+    const certName = course.certificationName || "";
+    const showName = opts.showName !== false && Boolean(certName);
+    const nameHtml = showName
+      ? `<span class="cert-badge-name">${escapeHtml(certName)}</span>`
+      : "";
+    return `<span class="cert-badge cert-badge-included" title="${escapeHtml(certName || "Certificate included")}">${certRibbonSvg()}<span>Certificate included</span>${nameHtml}</span>`;
+  }
+
   function applyStoredTheme() {
     const theme = window.SkillPathStorage
       ? window.SkillPathStorage.getTheme()
@@ -120,7 +139,7 @@ window.SkillPathNav = (function () {
     return check(opts?.silent !== true);
   }
 
-  function render({ activePage, state, onReset, onRoleChange }) {
+  function render({ activePage, state, onReset, onRoleChange, onSelectEmployee }) {
     const currentTheme = applyStoredTheme();
     consumeFlashToast();
     const mount = document.getElementById("app-navbar");
@@ -195,9 +214,20 @@ window.SkillPathNav = (function () {
       });
     }
 
-    const notifications = Array.isArray(currentState.notifications)
+    const allNotifications = Array.isArray(currentState.notifications)
       ? currentState.notifications
       : [];
+    const hrCertEnabled = currentState.hrCertNotifications !== false;
+    const notifications = allNotifications
+      .filter((n) =>
+        Storage && typeof Storage.isNotificationForRole === "function"
+          ? Storage.isNotificationForRole(n, activeRole, hrCertEnabled)
+          : true
+      )
+      .slice()
+      .sort((a, b) =>
+        String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
+      );
     const unreadCount = notifications.filter((n) => !n.read).length;
 
     const roles = [
@@ -239,28 +269,54 @@ window.SkillPathNav = (function () {
           <div class="notif-dropdown-header">
             <strong>Notifications (${notifications.length})</strong>
             ${
-              notifications.length > 0
-                ? `<button type="button" class="btn-link-xs" id="btn-mark-notifs-read">Mark all read</button>`
+              unreadCount > 0
+                ? `<button type="button" class="btn-link-xs" id="btn-mark-notifs-read">Mark all as read</button>`
                 : ""
             }
           </div>
           <div class="notif-list">
             ${
               notifications.length === 0
-                ? `<p class="notif-empty">No nudges or retest alerts yet.</p>`
+                ? `<p class="notif-empty">${isManagerOrHr ? "No employee certification alerts yet." : "No nudges or retest alerts yet."}</p>`
                 : notifications
-                    .slice(0, 6)
-                    .map(
-                      (n) => `
-                  <div class="notif-item ${n.read ? "is-read" : "is-unread"}">
+                    .slice(0, 10)
+                    .map((n) => {
+                      const tagLabel =
+                        n.type === "certification_completed"
+                          ? "Certification"
+                          : n.type === "retest_requested"
+                            ? "Retest Request"
+                            : n.type === "diagnostic_nudge"
+                              ? "Diagnostic Nudge"
+                              : "Manager/HR Nudge";
+                      const displayMessage =
+                        Engine && typeof Engine.formatNotificationMessage === "function"
+                          ? Engine.formatNotificationMessage(n, currentState)
+                          : n.message;
+                      const isActionable =
+                        isManagerOrHr && n.type === "certification_completed" && n.employeeId;
+                      return `
+                  <div class="notif-item ${n.read ? "is-read" : "is-unread"} ${isActionable ? "is-clickable" : ""}" data-notif-id="${escapeHtml(n.id)}" data-notif-emp="${escapeHtml(n.employeeId || "")}" data-notif-type="${escapeHtml(n.type || "")}">
                     <div class="notif-item-top">
-                      <span class="notif-type-tag">${escapeHtml(n.type === "retest_requested" ? "Retest Request" : n.type === "diagnostic_nudge" ? "Diagnostic Nudge" : "Manager/HR Nudge")}</span>
-                      <span class="notif-time">${escapeHtml((n.createdAt || "").slice(0, 10))}</span>
+                      <span class="notif-type-tag">${escapeHtml(tagLabel)}</span>
+                      <div class="notif-item-meta">
+                        <span class="notif-time">${escapeHtml((n.createdAt || "").slice(0, 10))}</span>
+                        ${
+                          !n.read
+                            ? `<button type="button" class="btn-link-xs notif-mark-read-btn" data-mark-read-id="${escapeHtml(n.id)}">Mark read</button>`
+                            : ""
+                        }
+                      </div>
                     </div>
-                    <p>${escapeHtml(n.message)}</p>
+                    <p>${escapeHtml(displayMessage)}</p>
+                    ${
+                      isActionable
+                        ? `<span class="notif-action-hint">Click to open employee details →</span>`
+                        : ""
+                    }
                   </div>
-                `
-                    )
+                `;
+                    })
                     .join("")
             }
           </div>
@@ -397,11 +453,50 @@ window.SkillPathNav = (function () {
 
     const markReadBtn = document.getElementById("btn-mark-notifs-read");
     if (markReadBtn) {
-      markReadBtn.addEventListener("click", async () => {
-        const updated = await Storage.markNotificationsRead();
-        render({ activePage, state: updated, onReset, onRoleChange });
+      markReadBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const updated = await Storage.markNotificationsRead(activeRole);
+        render({
+          activePage,
+          state: updated,
+          onReset,
+          onRoleChange,
+          onSelectEmployee,
+        });
       });
     }
+
+    mount.querySelectorAll("[data-mark-read-id]").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const nid = btn.getAttribute("data-mark-read-id");
+        const updated = await Storage.markNotificationRead(nid);
+        render({
+          activePage,
+          state: updated,
+          onReset,
+          onRoleChange,
+          onSelectEmployee,
+        });
+        const drop = document.getElementById("nav-notif-dropdown");
+        if (drop) drop.hidden = false;
+      });
+    });
+
+    mount.querySelectorAll(".notif-item.is-clickable").forEach((item) => {
+      item.addEventListener("click", async () => {
+        const nid = item.getAttribute("data-notif-id");
+        const empId = item.getAttribute("data-notif-emp");
+        const updated = await Storage.markNotificationRead(nid);
+        if (activePage === "dashboard" && typeof onSelectEmployee === "function") {
+          const drop = document.getElementById("nav-notif-dropdown");
+          if (drop) drop.hidden = true;
+          onSelectEmployee(empId, updated);
+        } else if (empId) {
+          window.location.href = `dashboard.html?employee=${encodeURIComponent(empId)}`;
+        }
+      });
+    });
 
     // Theme toggle
     const themeBtn = document.getElementById("nav-theme-btn");
@@ -437,6 +532,8 @@ window.SkillPathNav = (function () {
 
   return {
     escapeHtml,
+    certRibbonSvg,
+    certBadgeHtml,
     applyStoredTheme,
     showToast,
     setFlashToast,

@@ -112,6 +112,7 @@ def build_fallback_explanations(payload: dict[str, Any]) -> dict[str, Any]:
     priority = str(payload.get("companyPriority") or "").strip()
     user_type = str(payload.get("userType") or "employee").strip().lower()
     previous_field = str(payload.get("previousField") or "").strip()
+    cert_bonus_on = bool(payload.get("certRankingBonus"))
     non_tech_note = ""
     if user_type == "other":
         if previous_field:
@@ -137,22 +138,31 @@ def build_fallback_explanations(payload: dict[str, Any]) -> dict[str, Any]:
         current_pct = int(item.get("currentPct") or 0)
         target_pct = int(item.get("targetPct") or 80)
         is_priority = bool(item.get("isPriorityMatch"))
+        has_cert = bool(item.get("hasCertification"))
+        cert_name = str(item.get("certificationName") or "").strip()
+        cert_note = ""
+        if has_cert and cert_name:
+            cert_note = (
+                f" Includes {cert_name} (boosted by certification ranking bonus)."
+                if cert_bonus_on
+                else f" Includes {cert_name}."
+            )
 
         if current_pct >= target_pct:
             explanations[course_id] = (
                 f"Optional refresher: your {skill_name} score is already {current_pct}% "
-                f"(meets the {target_pct}% target for {role_name})."
+                f"(meets the {target_pct}% target for {role_name}).{cert_note}"
             )
         elif is_priority and priority:
             explanations[course_id] = (
                 f"Recommended because your {skill_name} score is {current_pct}% "
-                f"(target {target_pct}%) and {priority} is a current company priority.{non_tech_note}"
+                f"(target {target_pct}%) and {priority} is a current company priority.{non_tech_note}{cert_note}"
             )
         else:
             gap = max(0, target_pct - current_pct)
             explanations[course_id] = (
                 f"Recommended because your {skill_name} score is {current_pct}% "
-                f"(target {target_pct}%), closing a {gap}% gap required for {role_name}.{non_tech_note}"
+                f"(target {target_pct}%), closing a {gap}% gap required for {role_name}.{non_tech_note}{cert_note}"
             )
 
     return {

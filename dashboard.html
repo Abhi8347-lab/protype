@@ -33,6 +33,10 @@
             <p class="page-lead" id="dash-main-subtitle"></p>
           </div>
           <div class="header-cta-group">
+            <label class="toggle-switch-label" id="hr-cert-notifs-wrap" title="Include certification alerts in HR notification bell" hidden>
+              <input type="checkbox" id="toggle-hr-cert-notifs" checked />
+              <span>HR cert alerts</span>
+            </label>
             <label class="toggle-switch-label" title="Mask employee names as Employee #01, #02, ...">
               <input type="checkbox" id="toggle-anonymise" />
               <span>Anonymise names</span>
@@ -92,6 +96,16 @@
             </div>
             <div id="chart-emp-completion"></div>
           </article>
+
+          <article class="card chart-card">
+            <div class="card-header-row">
+              <div>
+                <h2>Certification Progress</h2>
+                <p class="card-sub">Certifications earned vs. certified courses in each employee&rsquo;s current plan.</p>
+              </div>
+            </div>
+            <div id="chart-cert-progress"></div>
+          </article>
         </section>
 
         <!-- 2. Team Skill Heatmap -->
@@ -147,6 +161,11 @@
                 <option value="Behind">Behind</option>
                 <option value="At risk">At risk</option>
               </select>
+              <select id="dash-filter-certs" class="select-compact" aria-label="Filter by certifications">
+                <option value="all">All Certifications</option>
+                <option value="has">Has certifications</option>
+                <option value="none">None</option>
+              </select>
             </div>
           </div>
 
@@ -186,10 +205,26 @@
             </div>
           </div>
 
+          <div class="detail-subcard detail-certs-wrap">
+            <h3>Certifications</h3>
+            <div id="detail-certifications-list"></div>
+          </div>
+
           <div class="detail-subcard detail-replan-wrap">
             <h3>Re-Plan History</h3>
             <div id="detail-replan-history"></div>
           </div>
+        </section>
+
+        <!-- Agent & Notify Tool Activity Log -->
+        <section class="card nudge-log-card">
+          <div class="card-header-row">
+            <div>
+              <h2>Agent Activity Log (Notify Tool)</h2>
+              <p class="card-sub">Simulated email/Slack certification alerts and manager notifications persisted in localStorage.</p>
+            </div>
+          </div>
+          <div id="dash-notify-log"></div>
         </section>
 
         <!-- Nudge & Retest Log -->

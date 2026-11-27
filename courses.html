@@ -111,6 +111,14 @@
           </div>
 
           <div class="filter-selects">
+            <label class="toggle-switch-label" title="Show only courses that include a certification">
+              <input type="checkbox" id="filter-cert-only" />
+              <span>Show only courses with certification</span>
+            </label>
+            <label class="toggle-switch-label" title="Give certified courses a small ranking boost in recommendations">
+              <input type="checkbox" id="toggle-cert-ranking-bonus" />
+              <span>Prioritize certified courses</span>
+            </label>
             <label class="inline-filter-label">
               <span>Platform</span>
               <select id="filter-platform" class="select-compact">
@@ -132,6 +140,58 @@
         <section id="courses-groups-container" class="course-groups"></section>
       </div>
     </main>
+
+    <!-- Certification Details Modal -->
+    <div id="cert-modal-backdrop" class="modal-backdrop" hidden>
+      <div
+        id="cert-modal"
+        class="card modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cert-modal-title"
+      >
+        <div class="modal-header">
+          <div>
+            <div class="ai-mini-badge">Course Certification</div>
+            <h2 id="cert-modal-title">Certification details</h2>
+          </div>
+          <button type="button" id="btn-cert-modal-close" class="icon-btn" aria-label="Close modal">✕</button>
+        </div>
+        <p class="card-sub" id="cert-modal-course-meta"></p>
+
+        <form id="cert-modal-form" novalidate>
+          <div class="form-group">
+            <label for="cert-id-input" class="field-label">
+              Certificate ID or verification link <span class="req">*</span>
+            </label>
+            <input
+              type="text"
+              id="cert-id-input"
+              class="text-input"
+              placeholder="e.g., MS-PBI-2026-104 or https://learn.microsoft.com/..."
+              maxlength="200"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="cert-date-input" class="field-label">
+              Completion date <span class="req">*</span>
+            </label>
+            <input type="date" id="cert-date-input" class="text-input" required />
+          </div>
+
+          <div id="cert-modal-error" class="form-error" role="alert" hidden></div>
+
+          <div class="modal-footer">
+            <button type="button" id="btn-cert-modal-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" id="btn-cert-modal-save" class="btn-primary">
+              Save Certification &amp; Complete
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <script src="js/data.js"></script>
     <script src="js/storage.js"></script>

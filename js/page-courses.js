@@ -15,8 +15,10 @@
   let viewFilter = "gap";
   let platformFilter = "all";
   let priceFilter = "all";
+  let certOnlyFilter = false;
   let aiExplanationCache = {};
   let aiSourceLabel = "Template Fallback";
+  let pendingCertCourse = null;
 
   const emptyEl = document.getElementById("courses-empty");
   const contentEl = document.getElementById("courses-content");
@@ -24,9 +26,20 @@
   const groupsContainer = document.getElementById("courses-groups-container");
   const platformSelect = document.getElementById("filter-platform");
   const priceSelect = document.getElementById("filter-price");
+  const certOnlyCheckbox = document.getElementById("filter-cert-only");
+  const certRankingCheckbox = document.getElementById("toggle-cert-ranking-bonus");
   const viewFilterEl = document.getElementById("view-filter-pills");
   const demoTagEl = document.getElementById("courses-demo-tag");
   const aiSourcePillEl = document.getElementById("ai-source-pill");
+
+  const certModalBackdrop = document.getElementById("cert-modal-backdrop");
+  const certModalForm = document.getElementById("cert-modal-form");
+  const certModalMeta = document.getElementById("cert-modal-course-meta");
+  const certIdInput = document.getElementById("cert-id-input");
+  const certDateInput = document.getElementById("cert-date-input");
+  const certModalError = document.getElementById("cert-modal-error");
+  const certModalCloseBtn = document.getElementById("btn-cert-modal-close");
+  const certModalCancelBtn = document.getElementById("btn-cert-modal-cancel");
 
   const STATUS_OPTIONS = [
     { id: "not_started", label: "Not Started" },
@@ -70,6 +83,7 @@
   }
 
   function matchesCourseFilters(course) {
+    if (certOnlyFilter && !course.hasCertification) return false;
     if (platformFilter !== "all" && course.platform !== platformFilter) {
       return false;
     }
@@ -78,10 +92,42 @@
     return true;
   }
 
-  async function handleStatusChange(courseId, nextStatus, skillName) {
+  function findCourseInCatalog(courseId) {
+    const bySkill = window.SkillPathData?.COURSES_BY_SKILL || {};
+    return Object.values(bySkill)
+      .flat()
+      .find((c) => c.id === courseId) || null;
+  }
+
+  function openCertificationModal(course, skillName) {
+    pendingCertCourse = { ...course, skillName };
+    const empId = appState.currentEmployeeId || Storage.CURRENT_EMP_ID;
+    const existingCert = Storage.getCertifications(empId, appState).find(
+      (c) => c.courseId === course.id
+    );
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    certModalMeta.textContent = `${course.title} — ${course.certificationName}`;
+    certIdInput.value = existingCert?.certId || "";
+    certDateInput.value = existingCert?.completedOn || todayIso;
+    certModalError.hidden = true;
+    certModalError.textContent = "";
+    certModalBackdrop.hidden = false;
+    window.setTimeout(() => certIdInput.focus(), 20);
+  }
+
+  function closeCertificationModal() {
+    pendingCertCourse = null;
+    certModalBackdrop.hidden = true;
+    certModalError.hidden = true;
+    certModalError.textContent = "";
+  }
+
+  async function finalizeCourseCompletion(courseId, nextStatus, skillName, certDetails) {
     const prevAnalysis = Engine.analyzeProfile(
       appState.profile,
-      appState.courseProgress
+      appState.courseProgress,
+      appState
     );
     const prevDoneSet = new Set(
       prevAnalysis
@@ -92,11 +138,41 @@
     );
 
     appState = await Storage.setCourseStatus(courseId, nextStatus);
+
+    if (nextStatus === "completed" && certDetails) {
+      const empId = appState.currentEmployeeId || Storage.CURRENT_EMP_ID;
+      const empName = appState.profile?.name || "Current Employee";
+      appState = await Storage.addCertification({
+        employeeId: empId,
+        courseId,
+        certificationName: certDetails.certificationName,
+        certId: certDetails.certId,
+        completedOn: certDetails.completedOn,
+      });
+      appState = await Storage.notifyManager({
+        employeeId: empId,
+        employeeName: empName,
+        courseId,
+        courseTitle: certDetails.courseTitle,
+        certificationName: certDetails.certificationName,
+        completedOn: certDetails.completedOn,
+      });
+    }
+
     renderPage();
+
+    if (nextStatus === "completed" && certDetails) {
+      Nav.showToast(
+        "Certification saved. Your manager has been notified.",
+        "success"
+      );
+      return;
+    }
 
     const nextAnalysis = Engine.analyzeProfile(
       appState.profile,
-      appState.courseProgress
+      appState.courseProgress,
+      appState
     );
     if (nextAnalysis) {
       const newlyCompleted = nextAnalysis.roadmap.find(
@@ -114,6 +190,17 @@
         Nav.showToast(`Course marked completed!`, "success");
       }
     }
+  }
+
+  async function handleStatusChange(courseId, nextStatus, skillName) {
+    if (nextStatus === "completed") {
+      const course = findCourseInCatalog(courseId);
+      if (course && course.hasCertification) {
+        openCertificationModal(course, skillName);
+        return;
+      }
+    }
+    await finalizeCourseCompletion(courseId, nextStatus, skillName, null);
   }
 
   function renderDashboard(analysis) {
@@ -203,10 +290,16 @@
         const filteredCourses = step.courses.filter(matchesCourseFilters);
         if (
           filteredCourses.length === 0 &&
-          (platformFilter !== "all" || priceFilter !== "all")
+          (platformFilter !== "all" || priceFilter !== "all" || certOnlyFilter)
         ) {
           return "";
         }
+
+        const empId = appState.currentEmployeeId || Storage.CURRENT_EMP_ID;
+        const earnedCerts = Storage.getCertifications(empId, appState);
+        const earnedByCourse = Object.fromEntries(
+          earnedCerts.map((c) => [c.courseId, c])
+        );
 
         const isDone = step.status === "strong";
         const headingName = isDone ? `${step.skillName} ✓` : step.skillName;
@@ -221,6 +314,10 @@
             const priceClass = course.isFree ? "badge-free" : "badge-paid";
             const whyLine =
               aiExplanationCache[course.id] || course.whyRecommended;
+            const earnedCert = earnedByCourse[course.id];
+            const certStatusChip = earnedCert
+              ? `<span class="cert-earned-chip ${earnedCert.status === "verified" ? "is-verified" : "is-pending"}">${earnedCert.status === "verified" ? "✓ Verified" : "Pending review"} · ${escapeHtml(earnedCert.certId)}</span>`
+              : "";
 
             const statusButtons = STATUS_OPTIONS.map((opt) => {
               const active = course.status === opt.id;
@@ -247,6 +344,11 @@
                 </div>
 
                 <h3 class="course-title">${escapeHtml(course.title)}</h3>
+
+                <div class="course-cert-row">
+                  ${Nav.certBadgeHtml(course, { showName: true })}
+                  ${certStatusChip}
+                </div>
 
                 <div class="course-why-box">
                   <span class="course-why-label">✦ Why this course?</span>
@@ -380,7 +482,8 @@
 
     const analysis = Engine.analyzeProfile(
       appState.profile,
-      appState.courseProgress
+      appState.courseProgress,
+      appState
     );
     if (!analysis) {
       emptyEl.hidden = false;
@@ -390,6 +493,10 @@
 
     emptyEl.hidden = true;
     contentEl.hidden = false;
+
+    if (certRankingCheckbox) {
+      certRankingCheckbox.checked = Boolean(appState.certRankingBonus);
+    }
 
     populatePlatformFilter(analysis.roadmap);
     renderDashboard(analysis);
@@ -420,6 +527,69 @@
     priceFilter = e.target.value;
     renderPage();
   });
+
+  if (certOnlyCheckbox) {
+    certOnlyCheckbox.addEventListener("change", (e) => {
+      certOnlyFilter = Boolean(e.target.checked);
+      renderPage();
+    });
+  }
+
+  if (certRankingCheckbox) {
+    certRankingCheckbox.addEventListener("change", async (e) => {
+      appState = await Storage.setCertRankingBonus(Boolean(e.target.checked));
+      aiExplanationCache = {};
+      renderPage(true);
+    });
+  }
+
+  if (certModalCloseBtn) {
+    certModalCloseBtn.addEventListener("click", closeCertificationModal);
+  }
+  if (certModalCancelBtn) {
+    certModalCancelBtn.addEventListener("click", closeCertificationModal);
+  }
+  if (certModalBackdrop) {
+    certModalBackdrop.addEventListener("click", (e) => {
+      if (e.target === certModalBackdrop) closeCertificationModal();
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && certModalBackdrop && !certModalBackdrop.hidden) {
+      closeCertificationModal();
+    }
+  });
+
+  if (certModalForm) {
+    certModalForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!pendingCertCourse) return;
+      const certId = certIdInput.value.trim();
+      const completedOn =
+        certDateInput.value || new Date().toISOString().slice(0, 10);
+      if (!certId) {
+        certModalError.hidden = false;
+        certModalError.textContent =
+          "Please enter a Certificate ID or verification link before completing this course.";
+        certIdInput.focus();
+        return;
+      }
+
+      const target = pendingCertCourse;
+      closeCertificationModal();
+      await finalizeCourseCompletion(
+        target.id,
+        "completed",
+        target.skillName,
+        {
+          courseTitle: target.title,
+          certificationName: target.certificationName,
+          certId,
+          completedOn,
+        }
+      );
+    });
+  }
 
   if (loadSampleBtn) {
     loadSampleBtn.addEventListener("click", async () => {

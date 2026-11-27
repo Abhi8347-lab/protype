@@ -54,6 +54,18 @@
         const priorityBadge = block.priorityTag
           ? `<span class="priority-badge">★ ${escapeHtml(block.priorityTag)}</span>`
           : "";
+        const skillStep = analysis.roadmap.find(
+          (s) => s.skillId === block.skillId
+        );
+        const planCoursesHtml =
+          skillStep && Array.isArray(skillStep.courses) && skillStep.courses.length
+            ? `<div class="plan-course-certs">${skillStep.courses
+                .map(
+                  (c) =>
+                    `<div class="plan-course-cert-row"><span class="plan-course-mini-title">${escapeHtml(c.title)}</span>${Nav.certBadgeHtml(c, { showName: true })}</div>`
+                )
+                .join("")}</div>`
+            : "";
         return `
           <article class="plan-week-card status-border-${block.status}">
             <div class="plan-week-top">
@@ -63,6 +75,7 @@
             <h3>${escapeHtml(block.title)}</h3>
             <p class="plan-week-target">${escapeHtml(block.targetSummary)}</p>
             <p class="plan-week-desc">${escapeHtml(block.description)}</p>
+            ${planCoursesHtml}
             <div class="plan-week-footer">
               <span class="slots-chip">🗓 ${escapeHtml(block.slotsLabel)}</span>
               <a href="courses.html#skill-${escapeHtml(block.skillId)}" class="roadmap-course-link">
@@ -213,6 +226,16 @@
             ? `<span class="roadmap-done-note">${item.completedViaCourses ? "Completed via courses ✓" : "Target proficiency met"}</span>`
             : `<a href="courses.html#skill-${escapeHtml(item.skillId)}" class="roadmap-course-link">Close ${item.gapPct}% gap →</a>`;
 
+        const roadmapCoursesHtml =
+          Array.isArray(item.courses) && item.courses.length
+            ? `<div class="roadmap-courses-preview">${item.courses
+                .map(
+                  (c) =>
+                    `<div class="roadmap-course-cert-item"><span class="roadmap-course-cert-title">${escapeHtml(c.title)}</span>${Nav.certBadgeHtml(c, { showName: true })}</div>`
+                )
+                .join("")}</div>`
+            : "";
+
         return `
           <li class="roadmap-step status-border-${item.status}">
             <div class="roadmap-step-rail">
@@ -234,6 +257,7 @@
                 ${quizLink}
               </div>
               <p class="roadmap-why">${escapeHtml(item.why)}</p>
+              ${roadmapCoursesHtml}
               <div class="roadmap-meter-row">
                 <div class="roadmap-mini-track">
                   <div class="roadmap-mini-fill status-${item.status}" style="width: ${pct}%"></div>

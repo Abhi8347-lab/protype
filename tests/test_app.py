@@ -141,3 +141,11 @@ def test_ai_explain_other_non_tech_fallback(client, monkeypatch) -> None:
     explanation = resp.get_json()["explanations"]["mslearn-powerbi-start"]
     assert "Retail" in explanation
     assert "fundamentals" in explanation.lower()
+
+
+def test_courses_and_dashboard_return_200(client) -> None:
+    for path in ["/courses.html", "/dashboard.html"]:
+        resp = client.get(path)
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert len(html) > 0
