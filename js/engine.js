@@ -756,7 +756,7 @@ window.SkillPathEngine = (function () {
   }
 
   /**
-   * Build unified employee records (seeded team + active current user) for Manager/HR Dashboard.
+   * Build unified employee records (server-scoped team or seeded fallback) for Manager/HR Dashboard.
    */
   function buildOrganizationDataset(state) {
     const data = window.SkillPathData;
@@ -764,6 +764,152 @@ window.SkillPathEngine = (function () {
     const orgPriorities = Array.isArray(activeState.priorities)
       ? activeState.priorities
       : data.DEFAULT_ORG_PRIORITIES || [];
+    const storageApi = window.SkillPathStorage;
+
+    if (Array.isArray(activeState.serverEmployees)) {
+      return activeState.serverEmployees.map((emp) => {
+        const empUserType = emp.userType === "other" ? "other" : "employee";
+        const empTypeLabel =
+          empUserType === "other" ? "New joiner / Other" : "Employee";
+        const prof = emp.profile || null;
+        const targetRole = prof?.targetRole || "junior_data_analyst";
+        const pseudoProfile = prof
+          ? {
+              ...prof,
+              name: prof.name || emp.name,
+              userType: empUserType,
+              status: empUserType,
+              previousField: prof.previousField || emp.previousField || "",
+            }
+          : {
+              name: emp.name,
+              userType: empUserType,
+              status: empUserType,
+              previousField: emp.previousField || "",
+              backgroundDetail:
+                emp.designation || data.ROLE_MAP[targetRole]?.name || "Analyst",
+              targetRole,
+              companyPriority: "Dashboards",
+              companyPriorities: ["Dashboards"],
+              learningSlotsPerWeek: 3,
+              weeklyHours: "5-10",
+              experience: "0",
+              skillScores: {},
+              selectedSkills: [],
+            };
+
+        const mergedVerified = emp.verifiedLevels || {};
+        const mergedTests = emp.testResults || {};
+        const courseProg = emp.courseProgress || {};
+
+        const analysis = analyzeProfile(pseudoProfile, courseProg, {
+          currentEmployeeId: emp.id,
+          verifiedLevelsOverride: mergedVerified,
+          priorities: orgPriorities,
+        });
+
+        const allAttempts = Object.values(mergedTests).flat();
+        const sortedDates = allAttempts
+          .map((a) => a.date)
+          .filter(Boolean)
+          .sort();
+        const lastTestDate = sortedDates.length
+          ? sortedDates[sortedDates.length - 1].slice(0, 10)
+          : "Not tested";
+
+        const verifiedCount = Object.keys(mergedVerified).length;
+        const avgLevel = computeAverageLevelLabel(mergedVerified);
+        const completionPct = analysis ? analysis.overallCoursePct : 0;
+
+        let status = "On track";
+        if (completionPct < 35 && verifiedCount === 0) status = "Behind";
+        else if (completionPct < 35 || avgLevel === "Beginner") status = "At risk";
+        else if (completionPct < 65) status = "Behind";
+
+        const spend = buildCourseSpendForProgress(courseProg);
+
+        const gateObj = emp.gate || {};
+        const reqSkills =
+          Array.isArray(gateObj.required) && gateObj.required.length
+            ? gateObj.required
+            : prof && Array.isArray(prof.selectedSkills) && prof.selectedSkills.length
+              ? prof.selectedSkills
+              : (data.ROLE_MAP[targetRole]?.skills || []).map((s) => s.skillId);
+        const gateDone = reqSkills.filter((sid) => Boolean(mergedVerified[sid]));
+        const gateClearedEmp =
+          Boolean(gateObj.cleared) ||
+          (reqSkills.length > 0 && gateDone.length >= reqSkills.length);
+        const gateStatus = gateClearedEmp
+          ? "cleared"
+          : gateDone.length > 0
+            ? "in_progress"
+            : "not_started";
+        const gateStatusLabel =
+          gateStatus === "cleared"
+            ? "Cleared"
+            : gateStatus === "in_progress"
+              ? "In progress"
+              : "Not started";
+
+        const empCerts = Array.isArray(emp.certifications)
+          ? emp.certifications
+          : [];
+        const verifiedCertCount = empCerts.filter(
+          (c) => c.status === "verified"
+        ).length;
+        const planCertSet = new Set();
+        if (analysis && Array.isArray(analysis.roadmap)) {
+          analysis.roadmap.forEach((step) => {
+            (step.courses || []).forEach((c) => {
+              if (c.hasCertification) planCertSet.add(c.id);
+            });
+          });
+        }
+        empCerts.forEach((c) => planCertSet.add(c.courseId));
+
+        return {
+          id: emp.id,
+          name: emp.name,
+          email: emp.email || "",
+          designation: emp.designation || data.ROLE_MAP[targetRole]?.name || "",
+          userType: empUserType,
+          userTypeLabel: empTypeLabel,
+          previousField: emp.previousField || "",
+          isCurrentUser: emp.id === activeState.currentEmployeeId,
+          isSeededDemo: Boolean(emp.isDemo),
+          team: emp.team || data.MANAGER_TEAM_NAME,
+          managerId: emp.managerId || null,
+          active: emp.active !== false,
+          mustChangePassword: Boolean(emp.mustChangePassword),
+          accountStatus: emp.accountStatus || "Active",
+          createdAt: emp.createdAt || "",
+          lastLogin: emp.lastLogin || null,
+          roleId: targetRole,
+          roleName: data.ROLE_MAP[targetRole]?.name || targetRole,
+          verifiedLevels: mergedVerified,
+          testResults: mergedTests,
+          verifiedCount,
+          avgLevel,
+          completionPct,
+          lastTestDate,
+          status,
+          gateStatus,
+          gateStatusLabel,
+          gateVerifiedCount: gateDone.length,
+          gateRequiredCount: reqSkills.length,
+          gateCleared: gateClearedEmp,
+          analysis,
+          courseProgress: courseProg,
+          certifications: empCerts,
+          certCount: empCerts.length,
+          verifiedCertCount,
+          certifiedCoursesInPlan: Math.max(empCerts.length, planCertSet.size),
+          replanHistory: emp.replanHistory || [],
+          spend,
+          levelsGained: emp.levelsGained || 1,
+        };
+      });
+    }
 
     const records = (data.SEED_EMPLOYEES || []).map((emp) => {
       const empUserType = emp.userType === "other" ? "other" : "employee";
@@ -837,7 +983,6 @@ window.SkillPathEngine = (function () {
             ? "In progress"
             : "Not started";
 
-      const storageApi = window.SkillPathStorage;
       const empCerts = storageApi
         ? storageApi.getCertifications(emp.id, activeState)
         : Array.isArray(emp.certifications)
@@ -859,12 +1004,15 @@ window.SkillPathEngine = (function () {
       return {
         id: emp.id,
         name: emp.name,
+        email: emp.email || "",
+        designation: emp.designation || "",
         userType: empUserType,
         userTypeLabel: empTypeLabel,
         previousField: emp.previousField || "",
         isCurrentUser: false,
         isSeededDemo: true,
         team: emp.team,
+        managerId: emp.managerId || "MGR-2001",
         roleId: emp.targetRole,
         roleName: data.ROLE_MAP[emp.targetRole]?.name || emp.targetRole,
         verifiedLevels: mergedVerified,
@@ -891,7 +1039,7 @@ window.SkillPathEngine = (function () {
       };
     });
 
-    // Include the active user as one row inside Manager's team
+    // Include the active user as one row inside Manager's team in offline mode
     const currentEmpId = activeState.currentEmployeeId || "emp_current";
     const activeProfile =
       activeState.profile || data.DEMO_EMPLOYEE_PROFILE;
@@ -932,7 +1080,6 @@ window.SkillPathEngine = (function () {
       Object.values(currentVerified).filter((v) => v.level !== "Beginner")
         .length + (currentAnalysis ? currentAnalysis.completedGapSkills.length : 0);
 
-    // Compute current user's true employee gate status (ignoring Manager/HR viewer role)
     let userGateInfo;
     if (activeState.profile) {
       userGateInfo = getGateStatus(activeState, { ignoreRoleBypass: true });
@@ -987,7 +1134,6 @@ window.SkillPathEngine = (function () {
     const currentTypeLabel =
       currentUserType === "other" ? "New joiner / Other" : "Employee";
 
-    const storageApi = window.SkillPathStorage;
     const currentCerts = storageApi
       ? storageApi.getCertifications(currentEmpId, activeState)
       : Array.isArray(activeState.certifications?.[currentEmpId])
@@ -1016,6 +1162,7 @@ window.SkillPathEngine = (function () {
       isCurrentUser: true,
       isSeededDemo: Boolean(activeProfile.isDemo),
       team: data.MANAGER_TEAM_NAME,
+      managerId: "MGR-2001",
       roleId: activeProfile.targetRole,
       roleName:
         data.ROLE_MAP[activeProfile.targetRole]?.name ||
@@ -1170,7 +1317,8 @@ window.SkillPathEngine = (function () {
     }
 
     try {
-      const resp = await window.fetch("/api/ai-explain", {
+      const fetchFn = window.SkillPathStorage?.apiFetch || window.fetch.bind(window);
+      const resp = await fetchFn("/api/ai-explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1205,21 +1353,30 @@ window.SkillPathEngine = (function () {
   }
 
   /**
-   * Format notification message, masking real employee names when HR anonymisation is enabled.
+   * Format notification message, masking real employee names when anonymisation is enabled.
+   * Shows only the Employee ID (e.g. EMP-1001) when anonymised for real IDs.
    */
   function formatNotificationMessage(notif, state) {
     if (!notif) return "";
     const activeState = state || {};
-    const isHrAnon =
-      activeState.activeRole === "hr" && Boolean(activeState.anonymiseHR);
-    if (!isHrAnon) {
+    const isAnon =
+      Boolean(activeState.anonymiseActive) ||
+      (activeState.activeRole === "hr" && Boolean(activeState.anonymiseHR));
+    if (!isAnon) {
       return String(notif.message || "");
     }
 
-    const dataset = buildOrganizationDataset(activeState);
-    const idx = dataset.findIndex((e) => e.id === notif.employeeId);
-    const padded = String(idx >= 0 ? idx + 1 : 0).padStart(2, "0");
-    const anonLabel = `Employee #${padded}`;
+    const empIdStr = String(notif.employeeId || "");
+    const hasFormalId = /^(EMP|MGR|HR)-\d+$/i.test(empIdStr);
+    let anonLabel;
+    if (hasFormalId) {
+      anonLabel = empIdStr;
+    } else {
+      const dataset = buildOrganizationDataset(activeState);
+      const idx = dataset.findIndex((e) => e.id === notif.employeeId);
+      const padded = String(idx >= 0 ? idx + 1 : 0).padStart(2, "0");
+      anonLabel = `Employee #${padded}`;
+    }
 
     if (notif.type === "certification_completed" && notif.certificationName) {
       const prettyDate = window.SkillPathStorage
@@ -1231,9 +1388,12 @@ window.SkillPathEngine = (function () {
       return `${anonLabel} completed the certification ${notif.certificationName}${coursePart} on ${prettyDate}.`;
     }
 
-    const rawMsg = String(notif.message || "");
+    let rawMsg = String(notif.message || "");
+    if (notif.employeeName && hasFormalId) {
+      rawMsg = rawMsg.split(`${notif.employeeName} (${empIdStr})`).join(empIdStr);
+    }
     if (notif.employeeName && rawMsg.includes(notif.employeeName)) {
-      return rawMsg.split(notif.employeeName).join(anonLabel);
+      rawMsg = rawMsg.split(notif.employeeName).join(anonLabel);
     }
     return rawMsg;
   }

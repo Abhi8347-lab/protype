@@ -1503,14 +1503,29 @@ window.SkillPathData = (function () {
 
   const MANAGER_TEAM_NAME = "Analytics & BI";
 
+  const LEGACY_EMPLOYEE_ID_MAP = {
+    emp_maya: "EMP-1001",
+    emp_ethan: "EMP-1002",
+    emp_elena: "EMP-1003",
+    emp_liam: "EMP-1004",
+    emp_priya: "EMP-1005",
+    emp_carlos: "EMP-1006",
+    emp_hana: "EMP-1007",
+    emp_noah: "EMP-1008",
+    emp_amara: "EMP-1009",
+  };
+
   /**
-   * 9 seeded demo employees across teams (Manager view filters to MANAGER_TEAM_NAME
-   * plus the current user; HR view displays the entire organization).
+   * 9 seeded demo employees assigned to MGR-2001 (EMP-1001..EMP-1008 existing team,
+   * EMP-1009 new joiner). HR view displays the entire organization.
    */
   const SEED_EMPLOYEES = [
     {
-      id: "emp_maya",
+      id: "EMP-1001",
       name: "Maya Lin",
+      email: "maya.lin@skillsync.demo",
+      designation: "Junior Data Analyst",
+      managerId: "MGR-2001",
       userType: "employee",
       team: "Analytics & BI",
       targetRole: "junior_data_analyst",
@@ -1565,8 +1580,11 @@ window.SkillPathData = (function () {
       levelsGained: 3,
     },
     {
-      id: "emp_ethan",
+      id: "EMP-1002",
       name: "Ethan Reed",
+      email: "ethan.reed@skillsync.demo",
+      designation: "Junior Data Analyst",
+      managerId: "MGR-2001",
       userType: "other",
       previousField: "Retail Operations",
       team: "Analytics & BI",
@@ -1597,8 +1615,11 @@ window.SkillPathData = (function () {
       levelsGained: 1,
     },
     {
-      id: "emp_elena",
+      id: "EMP-1003",
       name: "Elena Ivanova",
+      email: "elena.ivanova@skillsync.demo",
+      designation: "Data Engineer",
+      managerId: "MGR-2001",
       team: "Analytics & BI",
       targetRole: "data_engineer",
       companyPriority: "Data Governance",
@@ -1647,8 +1668,11 @@ window.SkillPathData = (function () {
       levelsGained: 2,
     },
     {
-      id: "emp_liam",
+      id: "EMP-1004",
       name: "Liam Carter",
+      email: "liam.carter@skillsync.demo",
+      designation: "Data Scientist",
+      managerId: "MGR-2001",
       team: "Analytics & BI",
       targetRole: "data_scientist",
       companyPriority: "AI Adoption",
@@ -1686,8 +1710,11 @@ window.SkillPathData = (function () {
       levelsGained: 1,
     },
     {
-      id: "emp_priya",
+      id: "EMP-1005",
       name: "Priya Sharma",
+      email: "priya.sharma@skillsync.demo",
+      designation: "AI / ML Engineer",
+      managerId: "MGR-2001",
       team: "AI & Data",
       targetRole: "ai_ml_engineer",
       companyPriority: "AI Adoption",
@@ -1737,8 +1764,11 @@ window.SkillPathData = (function () {
       levelsGained: 3,
     },
     {
-      id: "emp_carlos",
+      id: "EMP-1006",
       name: "Carlos Mendez",
+      email: "carlos.mendez@skillsync.demo",
+      designation: "DevOps Engineer",
+      managerId: "MGR-2001",
       team: "Platform & Cloud",
       targetRole: "devops_engineer",
       companyPriority: "Cloud Migration",
@@ -1767,8 +1797,11 @@ window.SkillPathData = (function () {
       levelsGained: 1,
     },
     {
-      id: "emp_hana",
+      id: "EMP-1007",
       name: "Hana Sato",
+      email: "hana.sato@skillsync.demo",
+      designation: "Full-Stack Developer",
+      managerId: "MGR-2001",
       team: "Web Engineering",
       targetRole: "fullstack_developer",
       companyPriority: "Dashboards",
@@ -1826,8 +1859,11 @@ window.SkillPathData = (function () {
       levelsGained: 3,
     },
     {
-      id: "emp_noah",
+      id: "EMP-1008",
       name: "Noah Brooks",
+      email: "noah.brooks@skillsync.demo",
+      designation: "Cybersecurity Analyst",
+      managerId: "MGR-2001",
       userType: "other",
       previousField: "Banking",
       team: "Security Ops",
@@ -1856,43 +1892,26 @@ window.SkillPathData = (function () {
       levelsGained: 1,
     },
     {
-      id: "emp_amara",
-      name: "Amara Okafor",
-      team: "Platform & Cloud",
-      targetRole: "cloud_engineer",
-      companyPriority: "Cloud Migration",
-      experience: "1-3",
-      weeklyHours: "10-20",
-      learningSlotsPerWeek: 5,
-      selfScores: { aws_cloud: 60, docker: 80, terraform: 60, linux: 60 },
-      verifiedLevels: {
-        docker: { level: "Expert", score: 5, easyCorrect: 3, hardCorrect: 2, verifiedPct: 90, updatedAt: "2026-11-18" },
-        aws_cloud: { level: "Intermediate", score: 4, easyCorrect: 3, hardCorrect: 1, verifiedPct: 60, updatedAt: "2026-11-20" },
-        terraform: { level: "Intermediate", score: 3, easyCorrect: 2, hardCorrect: 1, verifiedPct: 60, updatedAt: "2026-11-21" },
-      },
-      testResults: {
-        docker: [{ date: "2026-11-18", score: 5, easyCorrect: 3, hardCorrect: 2, level: "Expert", verifiedPct: 90 }],
-        aws_cloud: [{ date: "2026-11-20", score: 4, easyCorrect: 3, hardCorrect: 1, level: "Intermediate", verifiedPct: 60 }],
-        terraform: [{ date: "2026-11-21", score: 3, easyCorrect: 2, hardCorrect: 1, level: "Intermediate", verifiedPct: 60 }],
-      },
-      courseProgress: {
-        "coursera-aws-architect": "completed",
-        "yt-terraform-fcc": "completed",
-        "udemy-docker-k8s": "in_progress",
-      },
-      certifications: [
-        {
-          courseId: "coursera-aws-architect",
-          certificationName: "AWS Cloud Solutions Architect Certificate",
-          certId: "AWS-CSAA-7120",
-          completedOn: "2026-11-20",
-          status: "pending_review",
-        },
-      ],
-      replanHistory: [
-        { date: "2026-11-21", reason: "Terraform verified Intermediate", summary: "Advanced to Kubernetes EKS workload deployment." },
-      ],
-      levelsGained: 2,
+      id: "EMP-1009",
+      name: "Jordan Patel",
+      email: "jordan.patel@skillsync.demo",
+      designation: "Junior Data Analyst",
+      managerId: "MGR-2001",
+      userType: "other",
+      previousField: "Retail",
+      team: "Analytics & BI",
+      targetRole: "junior_data_analyst",
+      companyPriority: "Dashboards",
+      experience: "0",
+      weeklyHours: "5-10",
+      learningSlotsPerWeek: 3,
+      selfScores: {},
+      verifiedLevels: {},
+      testResults: {},
+      courseProgress: {},
+      certifications: [],
+      replanHistory: [],
+      levelsGained: 0,
     },
   ];
 
@@ -1907,6 +1926,7 @@ window.SkillPathData = (function () {
     DEMO_EMPLOYEE_PROFILE,
     DEFAULT_ORG_PRIORITIES,
     MANAGER_TEAM_NAME,
+    LEGACY_EMPLOYEE_ID_MAP,
     SEED_EMPLOYEES,
     SKILL_CATEGORIES,
     SKILLS_CATALOG,

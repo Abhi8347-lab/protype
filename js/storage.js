@@ -1,8 +1,9 @@
 /**
- * Browser localStorage persistence layer for SkillSync AI.
- * Stores all user profile data, diagnostic test attempts, verified levels,
- * course progress, nudges, notifications, HR priorities, and re-plan history
- * strictly in browser localStorage with automatic schema migration.
+ * Client persistence & authenticated API client for SkillSync AI.
+ *
+ * User accounts and learning/team records live on the Flask/SQLite backend.
+ * For the standalone offline JS unit-test runner (tests.html) or file:// preview,
+ * localStorage fallback is preserved without storing any passwords or credentials.
  */
 window.SkillPathStorage = (function () {
   const STORAGE_KEY = "skillsync_ai_state_v2";
@@ -12,12 +13,115 @@ window.SkillPathStorage = (function () {
   const CURRENT_EMP_ID = "emp_current";
   const VALID_USER_TYPES = ["employee", "other"];
 
+  let sessionCache = {
+    authenticated: false,
+    demoMode: false,
+    csrfToken: "",
+    user: null,
+    redirectTo: null,
+    sessionExpired: false,
+  };
+  let serverStateCache = null;
+
+  function isHttpOrigin() {
+    return (
+      typeof window !== "undefined" &&
+      (window.location.protocol === "http:" ||
+        window.location.protocol === "https:")
+    );
+  }
+
+  function isLocalTestMode() {
+    return (
+      typeof window !== "undefined" &&
+      (Boolean(window.__SKILLSYNC_LOCAL_TEST_MODE) || !isHttpOrigin())
+    );
+  }
+
   function isValidUserType(value) {
     return VALID_USER_TYPES.includes(value);
   }
 
   function normalizeUserType(value) {
     return isValidUserType(value) ? value : "other";
+  }
+
+  function resolveLegacyId(empId) {
+    const map = window.SkillPathData?.LEGACY_EMPLOYEE_ID_MAP || {};
+    return map[empId] || empId;
+  }
+
+  function getSessionInfo() {
+    return sessionCache;
+  }
+
+  function setSessionInfo(next) {
+    sessionCache = { ...sessionCache, ...(next || {}) };
+    return sessionCache;
+  }
+
+  function getCsrfToken() {
+    return sessionCache.csrfToken || "";
+  }
+
+  async function fetchSession(forceRefresh = false) {
+    if (!isHttpOrigin()) return sessionCache;
+    if (!forceRefresh && sessionCache.csrfToken && sessionCache._fetched) {
+      return sessionCache;
+    }
+    const resp = await window.fetch("/api/auth/session", {
+      credentials: "same-origin",
+    });
+    if (!resp.ok) return sessionCache;
+    const data = await resp.json();
+    sessionCache = {
+      ...data,
+      _fetched: true,
+    };
+    return sessionCache;
+  }
+
+  async function apiFetch(url, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    const headers = { ...(options.headers || {}) };
+    if (options.body && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (method !== "GET" && method !== "HEAD") {
+      if (!sessionCache.csrfToken) {
+        await fetchSession(true);
+      }
+      if (sessionCache.csrfToken) {
+        headers["X-CSRF-Token"] = sessionCache.csrfToken;
+      }
+    }
+
+    const resp = await window.fetch(url, {
+      ...options,
+      method,
+      headers,
+      credentials: "same-origin",
+    });
+
+    if (resp.status === 401 && !options.skipAuthRedirect) {
+      sessionCache.authenticated = false;
+      sessionCache.user = null;
+      serverStateCache = null;
+      if (
+        isHttpOrigin() &&
+        !window.location.pathname.endsWith("login.html") &&
+        window.location.pathname !== "/login"
+      ) {
+        window.location.replace("login.html");
+      }
+    } else if (resp.status === 403 && !options.skipAuthRedirect) {
+      const clone = resp.clone();
+      const body = await clone.json().catch(() => null);
+      if (body && body.forcePasswordChange) {
+        window.location.replace("change-password.html");
+      }
+    }
+    return resp;
   }
 
   function migrateProfileUserType(profileObj) {
@@ -134,8 +238,6 @@ window.SkillPathStorage = (function () {
       ? parsed.activeRole
       : "employee";
 
-    // Gate migration: existing users (schemaVersion < 3 or no gate field) with saved
-    // data are treated as "gate not cleared" — they must take tests for selectedSkills.
     const isLegacySchema =
       !parsed.gate ||
       typeof parsed.gate !== "object" ||
@@ -233,15 +335,24 @@ window.SkillPathStorage = (function () {
       updatedAt: parsed.updatedAt || null,
       gate,
       inProgress,
+      serverEmployees: Array.isArray(parsed.serverEmployees)
+        ? parsed.serverEmployees
+        : undefined,
+      managedUsers: Array.isArray(parsed.managedUsers)
+        ? parsed.managedUsers
+        : undefined,
+      currentUser: parsed.currentUser || undefined,
     };
   }
 
   function readLocal() {
+    if (serverStateCache && !isLocalTestMode()) {
+      return serverStateCache;
+    }
     try {
       let raw = window.localStorage.getItem(STORAGE_KEY);
       let needsMigrationSave = false;
       if (!raw) {
-        // Try v1 key (previous version)
         const legacyV1 = window.localStorage.getItem(LEGACY_KEY_V1);
         if (legacyV1) {
           raw = legacyV1;
@@ -249,7 +360,6 @@ window.SkillPathStorage = (function () {
         }
       }
       if (!raw) {
-        // Try oldest key
         const legacyOld = window.localStorage.getItem(LEGACY_KEY_OLD);
         if (legacyOld) {
           raw = legacyOld;
@@ -281,6 +391,10 @@ window.SkillPathStorage = (function () {
       ...migrateState(state),
       updatedAt: state.updatedAt || new Date().toISOString(),
     };
+    if (serverStateCache && !isLocalTestMode()) {
+      serverStateCache = payload;
+      return payload;
+    }
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
     } catch (_err) {
@@ -289,8 +403,79 @@ window.SkillPathStorage = (function () {
     return payload;
   }
 
-  async function initState() {
-    return readLocal();
+  function buildStateFromDashboardPayload(data) {
+    const base = defaultState();
+    return {
+      ...base,
+      activeRole: data.activeRole || "manager",
+      currentEmployeeId: data.currentUser?.id || CURRENT_EMP_ID,
+      currentUser: data.currentUser || null,
+      anonymiseHR: Boolean(data.anonymiseHR),
+      certRankingBonus: Boolean(data.certRankingBonus),
+      hrCertNotifications:
+        typeof data.hrCertNotifications === "boolean"
+          ? data.hrCertNotifications
+          : true,
+      certifications: data.certifications || {},
+      testResults: data.testResults || {},
+      verifiedLevels: data.verifiedLevels || {},
+      notifications: sanitizeNotificationsList(data.notifications),
+      nudges: Array.isArray(data.nudges) ? data.nudges : [],
+      agentActivityLog: Array.isArray(data.agentActivityLog)
+        ? data.agentActivityLog
+        : [],
+      priorities: Array.isArray(data.priorities)
+        ? data.priorities
+        : base.priorities,
+      serverEmployees: Array.isArray(data.employees) ? data.employees : [],
+      managedUsers: Array.isArray(data.managedUsers) ? data.managedUsers : [],
+    };
+  }
+
+  async function initState(opts = {}) {
+    if (isLocalTestMode()) {
+      return readLocal();
+    }
+    const sess = await fetchSession();
+    if (!sess.authenticated) {
+      return defaultState();
+    }
+    if (sess.user?.forcePasswordChange && opts.allowForcedChange) {
+      serverStateCache = {
+        ...defaultState(),
+        activeRole: sess.user.role,
+        currentEmployeeId: sess.user.id,
+        currentUser: sess.user,
+      };
+      return serverStateCache;
+    }
+
+    const isMgrOrHr =
+      sess.user && (sess.user.role === "manager" || sess.user.role === "hr");
+    const isDashboardPage =
+      typeof window !== "undefined" &&
+      document.body?.getAttribute("data-page") === "dashboard";
+
+    if (isMgrOrHr && isDashboardPage) {
+      const resp = await apiFetch("/api/dashboard/data", opts);
+      if (resp.ok) {
+        const data = await resp.json();
+        serverStateCache = buildStateFromDashboardPayload(data);
+        return serverStateCache;
+      }
+    }
+
+    const resp = await apiFetch("/api/me/state", opts);
+    if (resp.ok) {
+      const data = await resp.json();
+      serverStateCache = migrateState({
+        ...data,
+        currentUser: sess.user,
+      });
+      return serverStateCache;
+    }
+
+    return defaultState();
   }
 
   async function saveProfile(profile) {
@@ -301,14 +486,10 @@ window.SkillPathStorage = (function () {
     const rawUserType =
       profile.userType !== undefined ? profile.userType : profile.status;
     if (!isValidUserType(rawUserType)) {
-      throw new Error(
-        "Invalid user type. Please choose Employee or Other."
-      );
+      throw new Error("Invalid user type. Please choose Employee or Other.");
     }
     if (profile.status !== undefined && !isValidUserType(profile.status)) {
-      throw new Error(
-        "Invalid user type. Please choose Employee or Other."
-      );
+      throw new Error("Invalid user type. Please choose Employee or Other.");
     }
 
     const sanitizedProfile = {
@@ -321,11 +502,27 @@ window.SkillPathStorage = (function () {
           : "",
     };
 
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/profile", {
+        method: "POST",
+        body: JSON.stringify({ profile: sanitizedProfile }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to save profile.");
+      }
+      const next = await resp.json();
+      serverStateCache = migrateState({
+        ...next,
+        currentUser: sessionCache.user,
+      });
+      return serverStateCache;
+    }
+
     const local = readLocal();
     const newSelected = Array.isArray(sanitizedProfile.selectedSkills)
       ? sanitizedProfile.selectedSkills.slice()
       : [];
-
     const prevGate = local.gate || {
       required: [],
       completed: [],
@@ -335,16 +532,14 @@ window.SkillPathStorage = (function () {
     const prevCompleted = Array.isArray(prevGate.completed)
       ? prevGate.completed
       : [];
-
-    // Keep completed only if still in new selection; drop removed skills
     const newCompleted = prevCompleted.filter((s) => newSelected.includes(s));
     const newRequired = newSelected.slice();
-
-    // Cleared if all selected skills are completed (or 0 skills selected on profile)
     const isCleared =
       newRequired.length > 0
         ? newRequired.every((s) => newCompleted.includes(s))
-        : Boolean(sanitizedProfile && Array.isArray(sanitizedProfile.selectedSkills));
+        : Boolean(
+            sanitizedProfile && Array.isArray(sanitizedProfile.selectedSkills)
+          );
 
     const gate = {
       required: newRequired,
@@ -355,7 +550,6 @@ window.SkillPathStorage = (function () {
         : null,
     };
 
-    // Drop inProgress if that skill was removed from profile
     const updatedInProgress =
       local.inProgress && !newRequired.includes(local.inProgress.skill)
         ? null
@@ -371,6 +565,20 @@ window.SkillPathStorage = (function () {
   }
 
   async function setCourseStatus(courseId, status) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/course-status", {
+        method: "POST",
+        body: JSON.stringify({ courseId, status }),
+      });
+      if (resp.ok) {
+        serverStateCache = migrateState({
+          ...(await resp.json()),
+          currentUser: sessionCache.user,
+        });
+        return serverStateCache;
+      }
+    }
+
     const local = readLocal();
     const progress = { ...(local.courseProgress || {}) };
     if (status === "not_started") {
@@ -398,6 +606,13 @@ window.SkillPathStorage = (function () {
   }
 
   async function setAnonymiseHR(value) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      await apiFetch("/api/dashboard/settings", {
+        method: "POST",
+        body: JSON.stringify({ anonymiseHR: Boolean(value) }),
+      });
+      return initState();
+    }
     const local = readLocal();
     return writeLocal({
       ...local,
@@ -407,6 +622,19 @@ window.SkillPathStorage = (function () {
   }
 
   async function setCertRankingBonus(value) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/settings", {
+        method: "POST",
+        body: JSON.stringify({ certRankingBonus: Boolean(value) }),
+      });
+      if (resp.ok) {
+        serverStateCache = migrateState({
+          ...(await resp.json()),
+          currentUser: sessionCache.user,
+        });
+        return serverStateCache;
+      }
+    }
     const local = readLocal();
     return writeLocal({
       ...local,
@@ -416,6 +644,13 @@ window.SkillPathStorage = (function () {
   }
 
   async function setHrCertNotifications(value) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      await apiFetch("/api/dashboard/settings", {
+        method: "POST",
+        body: JSON.stringify({ hrCertNotifications: Boolean(value) }),
+      });
+      return initState();
+    }
     const local = readLocal();
     return writeLocal({
       ...local,
@@ -457,19 +692,19 @@ window.SkillPathStorage = (function () {
     return `${day} ${months[monthIdx]} ${year}`;
   }
 
-  /**
-   * Return deduplicated certifications for a given employee (including seeded demo data
-   * if not yet overridden in state.certifications).
-   */
   function getCertifications(employeeId, stateOverride) {
     const state = stateOverride || readLocal();
-    const empId = employeeId || state.currentEmployeeId || CURRENT_EMP_ID;
+    const rawEmpId = employeeId || state.currentEmployeeId || CURRENT_EMP_ID;
+    const empId = resolveLegacyId(rawEmpId);
     const map = state.certifications || {};
+    if (Array.isArray(map[rawEmpId])) {
+      return map[rawEmpId].map((c) => ({ ...c }));
+    }
     if (Array.isArray(map[empId])) {
       return map[empId].map((c) => ({ ...c }));
     }
     const seed = (window.SkillPathData?.SEED_EMPLOYEES || []).find(
-      (e) => e.id === empId
+      (e) => e.id === empId || e.id === rawEmpId
     );
     if (seed && Array.isArray(seed.certifications)) {
       return seed.certifications.map((c) => ({ ...c }));
@@ -487,10 +722,6 @@ window.SkillPathStorage = (function () {
     ).length;
   }
 
-  /**
-   * Add or update an employee certification record.
-   * Deduplicates by courseId so resetting and re-completing updates the existing record.
-   */
   async function addCertification({
     employeeId,
     courseId,
@@ -498,6 +729,8 @@ window.SkillPathStorage = (function () {
     certId,
     completedOn,
     status = "pending_review",
+    courseTitle,
+    skipNotify,
   }) {
     if (!courseId) {
       throw new Error("Course ID is required to record a certification.");
@@ -507,8 +740,6 @@ window.SkillPathStorage = (function () {
       throw new Error("Certificate ID or link is required.");
     }
 
-    const local = readLocal();
-    const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
     const courseMeta = findCourseMeta(courseId);
     const cleanName = String(
       certificationName ||
@@ -516,11 +747,40 @@ window.SkillPathStorage = (function () {
         courseMeta?.title ||
         courseId
     ).trim();
+    const cleanTitle = String(
+      courseTitle || courseMeta?.title || courseId
+    ).trim();
     const cleanDate = String(
       completedOn || new Date().toISOString().slice(0, 10)
     ).slice(0, 10);
-    const cleanStatus = status === "verified" ? "verified" : "pending_review";
 
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/certification", {
+        method: "POST",
+        body: JSON.stringify({
+          courseId: String(courseId),
+          courseTitle: cleanTitle,
+          certificationName: cleanName,
+          certId: cleanCertId,
+          completedOn: cleanDate,
+          notifyManager: !skipNotify,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to save certification.");
+      }
+      serverStateCache = migrateState({
+        ...(await resp.json()),
+        currentUser: sessionCache.user,
+      });
+      serverStateCache._lastCertNotifiedServer = !skipNotify;
+      return serverStateCache;
+    }
+
+    const local = readLocal();
+    const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
+    const cleanStatus = status === "verified" ? "verified" : "pending_review";
     const existingList = getCertifications(empId, local);
     const existingIdx = existingList.findIndex((c) => c.courseId === courseId);
     const record = {
@@ -550,6 +810,16 @@ window.SkillPathStorage = (function () {
   }
 
   async function verifyCertification(employeeId, courseId) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/dashboard/verify-certification", {
+        method: "POST",
+        body: JSON.stringify({ employeeId, courseId }),
+      });
+      if (resp.ok) {
+        return initState();
+      }
+    }
+
     const local = readLocal();
     const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
     const existingList = getCertifications(empId, local);
@@ -585,10 +855,6 @@ window.SkillPathStorage = (function () {
     });
   }
 
-  /**
-   * Create a manager (and optional HR) notification when an employee completes a certified course,
-   * and log the simulated [Notify Tool] event in agentActivityLog.
-   */
   async function notifyManager({
     employeeId,
     employeeName,
@@ -597,6 +863,15 @@ window.SkillPathStorage = (function () {
     certificationName,
     completedOn,
   }) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      // Certification endpoint already records manager notification atomically
+      if (serverStateCache && serverStateCache._lastCertNotifiedServer) {
+        serverStateCache._lastCertNotifiedServer = false;
+        return serverStateCache;
+      }
+      return serverStateCache || readLocal();
+    }
+
     const local = readLocal();
     const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
     const empName = String(
@@ -656,6 +931,20 @@ window.SkillPathStorage = (function () {
   }
 
   async function recordTestAttempt(employeeId, skillId, attemptRecord) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/test-attempt", {
+        method: "POST",
+        body: JSON.stringify({ skillId, attemptRecord }),
+      });
+      if (resp.ok) {
+        serverStateCache = migrateState({
+          ...(await resp.json()),
+          currentUser: sessionCache.user,
+        });
+        return serverStateCache;
+      }
+    }
+
     const local = readLocal();
     const empId = employeeId || local.currentEmployeeId || CURRENT_EMP_ID;
     const allResults = { ...(local.testResults || {}) };
@@ -680,27 +969,39 @@ window.SkillPathStorage = (function () {
     };
     allVerified[empId] = empVerified;
 
-    // Update gate: mark this skill as completed for the current user
-    let updatedGate = local.gate || { required: [], completed: [], cleared: false, clearedAt: null };
+    let updatedGate = local.gate || {
+      required: [],
+      completed: [],
+      cleared: false,
+      clearedAt: null,
+    };
     if (empId === (local.currentEmployeeId || CURRENT_EMP_ID)) {
-      const prevCompleted = Array.isArray(updatedGate.completed) ? updatedGate.completed : [];
+      const prevCompleted = Array.isArray(updatedGate.completed)
+        ? updatedGate.completed
+        : [];
       const newCompleted = prevCompleted.includes(skillId)
         ? prevCompleted
         : [...prevCompleted, skillId];
-      const required = Array.isArray(updatedGate.required) ? updatedGate.required : [];
-      const isCleared = required.length > 0 && required.every((s) => newCompleted.includes(s));
+      const required = Array.isArray(updatedGate.required)
+        ? updatedGate.required
+        : [];
+      const isCleared =
+        required.length > 0 && required.every((s) => newCompleted.includes(s));
       updatedGate = {
         ...updatedGate,
         completed: newCompleted,
         cleared: isCleared,
-        clearedAt: isCleared && !updatedGate.clearedAt ? new Date().toISOString() : updatedGate.clearedAt,
+        clearedAt:
+          isCleared && !updatedGate.clearedAt
+            ? new Date().toISOString()
+            : updatedGate.clearedAt,
       };
     }
 
-    // Clear inProgress for this skill since it's now completed
-    const updatedInProgress = local.inProgress && local.inProgress.skill === skillId
-      ? null
-      : local.inProgress;
+    const updatedInProgress =
+      local.inProgress && local.inProgress.skill === skillId
+        ? null
+        : local.inProgress;
 
     return writeLocal({
       ...local,
@@ -713,6 +1014,27 @@ window.SkillPathStorage = (function () {
   }
 
   async function addReplanEntry(entry) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      if (
+        sessionCache.user?.role === "employee" ||
+        !entry.employeeId ||
+        entry.employeeId === sessionCache.user?.id
+      ) {
+        const resp = await apiFetch("/api/me/replan", {
+          method: "POST",
+          body: JSON.stringify(entry),
+        });
+        if (resp.ok) {
+          serverStateCache = migrateState({
+            ...(await resp.json()),
+            currentUser: sessionCache.user,
+          });
+          return serverStateCache;
+        }
+      }
+      return serverStateCache || readLocal();
+    }
+
     const local = readLocal();
     const list = Array.isArray(local.replanHistory)
       ? local.replanHistory.slice()
@@ -736,6 +1058,16 @@ window.SkillPathStorage = (function () {
     senderRole = "manager",
     message,
   }) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/dashboard/nudge", {
+        method: "POST",
+        body: JSON.stringify({ employeeId, actionType, message }),
+      });
+      if (resp.ok) {
+        return initState();
+      }
+    }
+
     const local = readLocal();
     const timestamp = new Date().toISOString();
     const id = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -778,20 +1110,45 @@ window.SkillPathStorage = (function () {
   function isNotificationForRole(notif, activeRole, hrEnabled = true) {
     if (!notif) return false;
     if (activeRole === "manager") {
-      return notif.audience === "manager" || notif.type === "certification_completed";
+      return (
+        notif.audience === "manager" ||
+        notif.type === "certification_completed" ||
+        notif.type === "account_activated"
+      );
     }
     if (activeRole === "hr") {
       return (
         notif.audience === "hr" ||
-        (notif.type === "certification_completed" &&
+        ((notif.type === "certification_completed" ||
+          notif.type === "account_activated") &&
           hrEnabled &&
           notif.notifyHR !== false)
       );
     }
-    return notif.audience !== "manager" && notif.type !== "certification_completed";
+    return (
+      notif.audience !== "manager" &&
+      notif.type !== "certification_completed" &&
+      notif.type !== "account_activated"
+    );
   }
 
   async function markNotificationRead(notifId) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      await apiFetch("/api/notifications/read", {
+        method: "POST",
+        body: JSON.stringify({ notificationId: notifId }),
+      });
+      if (serverStateCache) {
+        serverStateCache = {
+          ...serverStateCache,
+          notifications: (serverStateCache.notifications || []).map((n) =>
+            n.id === notifId ? { ...n, read: true } : n
+          ),
+        };
+        return serverStateCache;
+      }
+    }
+
     const local = readLocal();
     const notifications = (local.notifications || []).map((n) =>
       n.id === notifId ? { ...n, read: true } : n
@@ -804,6 +1161,23 @@ window.SkillPathStorage = (function () {
   }
 
   async function markNotificationsRead(activeRole) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      await apiFetch("/api/notifications/read", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (serverStateCache) {
+        serverStateCache = {
+          ...serverStateCache,
+          notifications: (serverStateCache.notifications || []).map((n) => ({
+            ...n,
+            read: true,
+          })),
+        };
+        return serverStateCache;
+      }
+    }
+
     const local = readLocal();
     const role = activeRole || local.activeRole || "employee";
     const hrEnabled = local.hrCertNotifications !== false;
@@ -820,7 +1194,6 @@ window.SkillPathStorage = (function () {
   }
 
   async function savePriorities(priorities) {
-    const local = readLocal();
     const clean = (Array.isArray(priorities) ? priorities : [])
       .filter((p) => p && p.skillId)
       .map((p) => ({
@@ -828,6 +1201,15 @@ window.SkillPathStorage = (function () {
         weight: Math.max(1, Math.min(5, Number(p.weight) || 3)),
       }));
 
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      await apiFetch("/api/dashboard/priorities", {
+        method: "POST",
+        body: JSON.stringify({ priorities: clean }),
+      });
+      return initState();
+    }
+
+    const local = readLocal();
     return writeLocal({
       ...local,
       priorities: clean,
@@ -836,6 +1218,20 @@ window.SkillPathStorage = (function () {
   }
 
   async function resetState() {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      const resp = await apiFetch("/api/me/reset", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (resp.ok) {
+        serverStateCache = migrateState({
+          ...(await resp.json()),
+          currentUser: sessionCache.user,
+        });
+        return serverStateCache;
+      }
+    }
+
     const local = readLocal();
     try {
       window.localStorage.removeItem(STORAGE_KEY);
@@ -870,11 +1266,21 @@ window.SkillPathStorage = (function () {
     return clean;
   }
 
-  /**
-   * Save mid-test resume state so a refresh can resume at the exact question.
-   * Stores shuffled order and all answers given so far.
-   */
   function saveInProgress(inProgressData) {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      apiFetch("/api/me/in-progress", {
+        method: "POST",
+        keepalive: true,
+        body: JSON.stringify({ inProgress: inProgressData }),
+      }).catch(() => {});
+      if (serverStateCache) {
+        serverStateCache = {
+          ...serverStateCache,
+          inProgress: inProgressData,
+        };
+        return serverStateCache;
+      }
+    }
     const local = readLocal();
     return writeLocal({
       ...local,
@@ -884,6 +1290,16 @@ window.SkillPathStorage = (function () {
   }
 
   function clearInProgress() {
+    if (!isLocalTestMode() && sessionCache.authenticated) {
+      apiFetch("/api/me/in-progress", {
+        method: "POST",
+        body: JSON.stringify({ inProgress: null }),
+      }).catch(() => {});
+      if (serverStateCache) {
+        serverStateCache = { ...serverStateCache, inProgress: null };
+        return serverStateCache;
+      }
+    }
     const local = readLocal();
     return writeLocal({
       ...local,
@@ -892,26 +1308,115 @@ window.SkillPathStorage = (function () {
     });
   }
 
-  /**
-   * Recompute and persist the gate state from the current profile + completed tests.
-   * Called after profile edits and test completions.
-   */
   function updateGate(profile, completedSkillIds) {
     const local = readLocal();
-    const selectedSkills = Array.isArray(profile?.selectedSkills) ? profile.selectedSkills : [];
+    const selectedSkills = Array.isArray(profile?.selectedSkills)
+      ? profile.selectedSkills
+      : [];
     const required = selectedSkills.slice();
     const completed = Array.isArray(completedSkillIds)
       ? completedSkillIds.filter((s) => required.includes(s))
       : [];
-    const isCleared = required.length > 0 && required.every((s) => completed.includes(s));
+    const isCleared =
+      required.length > 0 && required.every((s) => completed.includes(s));
     const prevGate = local.gate || {};
     const gate = {
       required,
       completed,
       cleared: isCleared,
-      clearedAt: isCleared ? (prevGate.clearedAt || new Date().toISOString()) : null,
+      clearedAt: isCleared
+        ? prevGate.clearedAt || new Date().toISOString()
+        : null,
     };
     return writeLocal({ ...local, gate, updatedAt: new Date().toISOString() });
+  }
+
+  // ── Manager / Auth Helper APIs ──────────────────────────────────────────────
+  async function createEmployee(payload) {
+    const resp = await apiFetch("/api/employees", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || "Failed to create employee account.");
+    }
+    return data;
+  }
+
+  async function sendLoginEmail(empId) {
+    const resp = await apiFetch(
+      `/api/employees/${encodeURIComponent(empId)}/send-login-email`,
+      { method: "POST", body: JSON.stringify({}) }
+    );
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || "Failed to send login email.");
+    }
+    return data;
+  }
+
+  async function toggleEmployeeActive(empId, active) {
+    const resp = await apiFetch(
+      `/api/employees/${encodeURIComponent(empId)}/deactivate`,
+      {
+        method: "POST",
+        body: JSON.stringify(
+          typeof active === "boolean" ? { active } : {}
+        ),
+      }
+    );
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || "Failed to update employee status.");
+    }
+    return data;
+  }
+
+  async function resetEmployeePassword(empId) {
+    const resp = await apiFetch(
+      `/api/employees/${encodeURIComponent(empId)}/reset-password`,
+      { method: "POST", body: JSON.stringify({}) }
+    );
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || "Failed to reset employee password.");
+    }
+    return data;
+  }
+
+  async function demoSwitchRole(role) {
+    const resp = await apiFetch("/api/demo/switch-role", {
+      method: "POST",
+      body: JSON.stringify({ role }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.error || "Unable to switch demo role.");
+    }
+    serverStateCache = null;
+    await fetchSession(true);
+    return data;
+  }
+
+  async function logout() {
+    try {
+      await apiFetch("/api/logout", {
+        method: "POST",
+        body: JSON.stringify({}),
+        skipAuthRedirect: true,
+      });
+    } catch (_err) {
+      // Proceed with client redirect even if network hiccups
+    }
+    serverStateCache = null;
+    sessionCache = {
+      authenticated: false,
+      demoMode: sessionCache.demoMode,
+      csrfToken: "",
+      user: null,
+      redirectTo: null,
+    };
   }
 
   return {
@@ -919,6 +1424,11 @@ window.SkillPathStorage = (function () {
     VALID_USER_TYPES,
     isValidUserType,
     normalizeUserType,
+    getSessionInfo,
+    setSessionInfo,
+    getCsrfToken,
+    fetchSession,
+    apiFetch,
     readLocal,
     initState,
     saveProfile,
@@ -947,5 +1457,11 @@ window.SkillPathStorage = (function () {
     saveInProgress,
     clearInProgress,
     updateGate,
+    createEmployee,
+    sendLoginEmail,
+    toggleEmployeeActive,
+    resetEmployeePassword,
+    demoSwitchRole,
+    logout,
   };
 })();

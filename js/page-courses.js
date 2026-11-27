@@ -7,11 +7,15 @@
   const Nav = window.SkillPathNav;
   const { escapeHtml } = Nav;
 
-  if (window.__skillSyncGateBlocked || !Nav.requireDiagnosticComplete()) {
+  const sess = await Nav.requireLogin();
+  if (!sess || !sess.authenticated || sess.redirectedTo) {
     return;
   }
 
   let appState = await Storage.initState();
+  if (!Nav.requireDiagnosticComplete()) {
+    return;
+  }
   let viewFilter = "gap";
   let platformFilter = "all";
   let priceFilter = "all";

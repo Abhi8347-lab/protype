@@ -1,13 +1,17 @@
 /**
- * Shared navigation bar, role switcher (Employee / Manager / HR),
+ * Shared navigation bar, login guard, default-password banner,
  * notifications bell, dark mode toggle, page stepper, and toast utilities.
  *
+ * Auth guard: requireLogin() redirects unauthenticated visitors to login.html.
  * Gate guard: requireDiagnosticComplete() blocks locked pages for Employees
  * who haven't completed all required skill tests.
  */
 window.SkillPathNav = (function () {
   const FLASH_TOAST_KEY = "skillsync_flash_toast";
+  const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
   let pageshowGuardBound = false;
+  let idleWatcherBound = false;
+  let idleTimeoutHandle = null;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -22,9 +26,6 @@ window.SkillPathNav = (function () {
     return `<svg class="cert-ribbon-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>`;
   }
 
-  /**
-   * Shared inline-SVG certification badge for courses across courses.html, analyzer.html, and dashboard.html.
-   */
   function certBadgeHtml(course, opts = {}) {
     if (!course || !course.hasCertification) {
       return `<span class="cert-badge cert-badge-none">No certificate</span>`;
@@ -101,15 +102,89 @@ window.SkillPathNav = (function () {
     );
   }
 
+  function startInactivityWatcher() {
+    if (idleWatcherBound) return;
+    idleWatcherBound = true;
+
+    let lastReset = 0;
+    async function triggerIdleLogout() {
+      if (window.SkillPathStorage) {
+        await window.SkillPathStorage.logout();
+      }
+      window.location.replace("login.html?reason=timeout");
+    }
+
+    function resetIdleTimer() {
+      const now = Date.now();
+      if (now - lastReset < 1000 && idleTimeoutHandle) return;
+      lastReset = now;
+      if (idleTimeoutHandle) clearTimeout(idleTimeoutHandle);
+      idleTimeoutHandle = window.setTimeout(triggerIdleLogout, INACTIVITY_LIMIT_MS);
+    }
+
+    ["click", "keydown", "mousemove", "scroll", "touchstart"].forEach((evt) => {
+      window.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+    resetIdleTimer();
+  }
+
+  /**
+   * Login & Role guard.
+   * Redirects unauthenticated visitors to login.html, forced password-change users
+   * to change-password.html, and blocks unauthorized roles (e.g. Employee on dashboard.html).
+   */
+  async function requireLogin(opts = {}) {
+    const Storage = window.SkillPathStorage;
+    const redirectFn =
+      typeof opts.redirectFn === "function"
+        ? opts.redirectFn
+        : (url) => window.location.replace(url);
+
+    const sess = opts.sessionInfo
+      ? opts.sessionInfo
+      : Storage
+        ? await Storage.fetchSession()
+        : { authenticated: false };
+
+    if (!sess || !sess.authenticated || !sess.user) {
+      redirectFn("login.html");
+      return { authenticated: false, redirectedTo: "login.html" };
+    }
+
+    if (sess.user.forcePasswordChange && !opts.allowForcedChange) {
+      redirectFn("change-password.html");
+      return {
+        authenticated: true,
+        user: sess.user,
+        redirectedTo: "change-password.html",
+      };
+    }
+
+    if (
+      Array.isArray(opts.allowedRoles) &&
+      !opts.allowedRoles.includes(sess.user.role)
+    ) {
+      if (opts.redirectOnForbidden) {
+        redirectFn(opts.redirectOnForbidden);
+      }
+      return {
+        authenticated: true,
+        forbidden: true,
+        user: sess.user,
+      };
+    }
+
+    if (!opts.sessionInfo) {
+      startInactivityWatcher();
+    }
+
+    return sess;
+  }
+
   /**
    * Gate guard function. Call on every locked page (analyzer.html, courses.html, etc.).
    * Redirects to quiz.html with toast "Please complete your diagnostic test first"
    * when an Employee has not cleared the diagnostic gate.
-   * Also guards Back/Forward navigation via `pageshow`.
-   *
-   * @param {object} [opts]
-   * @param {boolean} [opts.silent] - Skip setting flash toast if true.
-   * @returns {boolean} true if access is allowed, false if blocked & redirecting.
    */
   function requireDiagnosticComplete(opts) {
     const Storage = window.SkillPathStorage;
@@ -117,6 +192,11 @@ window.SkillPathNav = (function () {
     if (!Storage || !Engine) return true;
 
     function check(showMessage) {
+      const sess = Storage.getSessionInfo ? Storage.getSessionInfo() : null;
+      if (sess && sess._fetched && !sess.authenticated) {
+        window.location.replace("login.html");
+        return false;
+      }
       const state = Storage.readLocal();
       if (Engine.isGateCleared(state)) {
         return true;
@@ -148,7 +228,10 @@ window.SkillPathNav = (function () {
     const Storage = window.SkillPathStorage;
     const Engine = window.SkillPathEngine;
     const currentState = state || (Storage ? Storage.readLocal() : {});
-    const activeRole = currentState.activeRole || "employee";
+    const sess = Storage && Storage.getSessionInfo ? Storage.getSessionInfo() : {};
+    const sessionUser = sess.user || currentState.currentUser || null;
+    const demoMode = Boolean(sess.demoMode);
+    const activeRole = sessionUser?.role || currentState.activeRole || "employee";
     const profile = currentState.profile || null;
     const analysis =
       profile && Engine
@@ -159,7 +242,6 @@ window.SkillPathNav = (function () {
           )
         : null;
 
-    // Gate state
     const gateCleared = Engine ? Engine.isGateCleared(currentState) : false;
     const isManagerOrHr = activeRole === "manager" || activeRole === "hr";
     const lockedByGate = !gateCleared && !isManagerOrHr;
@@ -230,28 +312,40 @@ window.SkillPathNav = (function () {
       );
     const unreadCount = notifications.filter((n) => !n.read).length;
 
-    const roles = [
+    // Demo-mode role jump switch (hidden completely unless DEMO_MODE=1)
+    const demoRoles = [
       { id: "employee", label: "Employee" },
       { id: "manager", label: "Manager" },
       { id: "hr", label: "HR" },
     ];
-
-    const roleSwitcherHtml = `
-      <div class="nav-role-switcher" role="group" aria-label="Switch perspective role">
-        ${roles
+    const demoSwitcherHtml = demoMode
+      ? `
+      <div class="nav-role-switcher" role="group" aria-label="Demo mode role switch" title="Demo Mode quick jump">
+        <span class="demo-switch-tag">Demo</span>
+        ${demoRoles
           .map(
             (r) => `
           <button
             type="button"
             class="role-switch-btn ${activeRole === r.id ? "is-active" : ""}"
-            data-switch-role="${r.id}"
+            data-demo-switch-role="${r.id}"
             aria-pressed="${activeRole === r.id}"
           >${r.label}</button>
         `
           )
           .join("")}
       </div>
-    `;
+    `
+      : "";
+
+    const userBadgeHtml = sessionUser
+      ? `
+      <div class="nav-user-pill" title="${escapeHtml(sessionUser.email || "")}">
+        <span class="nav-user-name">${escapeHtml(sessionUser.name)}</span>
+        <code class="nav-user-id">${escapeHtml(sessionUser.id)}</code>
+      </div>
+    `
+      : "";
 
     const notifHtml = `
       <div class="notif-wrapper">
@@ -277,24 +371,29 @@ window.SkillPathNav = (function () {
           <div class="notif-list">
             ${
               notifications.length === 0
-                ? `<p class="notif-empty">${isManagerOrHr ? "No employee certification alerts yet." : "No nudges or retest alerts yet."}</p>`
+                ? `<p class="notif-empty">${isManagerOrHr ? "No employee certification or activation alerts yet." : "No nudges or retest alerts yet."}</p>`
                 : notifications
                     .slice(0, 10)
                     .map((n) => {
                       const tagLabel =
                         n.type === "certification_completed"
                           ? "Certification"
-                          : n.type === "retest_requested"
-                            ? "Retest Request"
-                            : n.type === "diagnostic_nudge"
-                              ? "Diagnostic Nudge"
-                              : "Manager/HR Nudge";
+                          : n.type === "account_activated"
+                            ? "Account Activated"
+                            : n.type === "retest_requested"
+                              ? "Retest Request"
+                              : n.type === "diagnostic_nudge"
+                                ? "Diagnostic Nudge"
+                                : "Manager/HR Nudge";
                       const displayMessage =
                         Engine && typeof Engine.formatNotificationMessage === "function"
                           ? Engine.formatNotificationMessage(n, currentState)
                           : n.message;
                       const isActionable =
-                        isManagerOrHr && n.type === "certification_completed" && n.employeeId;
+                        isManagerOrHr &&
+                        (n.type === "certification_completed" ||
+                          n.type === "account_activated") &&
+                        n.employeeId;
                       return `
                   <div class="notif-item ${n.read ? "is-read" : "is-unread"} ${isActionable ? "is-clickable" : ""}" data-notif-id="${escapeHtml(n.id)}" data-notif-emp="${escapeHtml(n.employeeId || "")}" data-notif-type="${escapeHtml(n.type || "")}">
                     <div class="notif-item-top">
@@ -334,13 +433,41 @@ window.SkillPathNav = (function () {
       >${currentTheme === "dark" ? "☀️" : "🌙"}</button>
     `;
 
-    const resetBtn = profile
-      ? `<button type="button" class="btn-ghost-sm" id="nav-reset-btn" title="Start over with a fresh profile">Reset</button>`
+    const resetBtn =
+      profile && !isManagerOrHr
+        ? `<button type="button" class="btn-ghost-sm" id="nav-reset-btn" title="Start over with a fresh profile">Reset</button>`
+        : "";
+
+    const changePwLink =
+      sessionUser && activePage !== "change-password"
+        ? `<a href="change-password.html" class="btn-ghost-sm" id="nav-change-pw-link" title="Change password">Password</a>`
+        : "";
+
+    const logoutBtn = sessionUser
+      ? `<button type="button" class="btn-ghost-sm" id="nav-logout-btn" title="Sign out">Logout</button>`
+      : "";
+
+    const showDefaultPwBanner = Boolean(
+      sessionUser &&
+        sessionUser.mustChangePassword &&
+        !sessionUser.forcePasswordChange &&
+        activePage !== "change-password"
+    );
+
+    const defaultPwBannerHtml = showDefaultPwBanner
+      ? `
+      <div id="default-pw-banner" class="default-pw-banner" role="alert">
+        <div class="default-pw-banner-inner">
+          <span>⚠ <strong>Security notice:</strong> You are using the default password. Please change it now.</span>
+          <a href="change-password.html" class="btn-xs">Change password</a>
+        </div>
+      </div>
+    `
       : "";
 
     mount.innerHTML = `
       <div class="navbar-inner">
-        <a href="index.html" class="brand-link">
+        <a href="${isManagerOrHr ? "dashboard.html" : "index.html"}" class="brand-link">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
@@ -354,6 +481,10 @@ window.SkillPathNav = (function () {
           </span>
         </a>
 
+        ${
+          sessionUser?.forcePasswordChange
+            ? ""
+            : `
         <nav class="page-stepper" aria-label="Primary flow">
           ${steps
             .map((step, idx) => {
@@ -391,46 +522,48 @@ window.SkillPathNav = (function () {
               `;
             })
             .join("")}
-        </nav>
-
-        <div class="nav-actions">
-          ${roleSwitcherHtml}
-          ${notifHtml}
-          ${themeToggleHtml}
-          ${resetBtn}
-        </div>
-      </div>
-    `;
-
-    // Role switcher bindings
-    mount.querySelectorAll("[data-switch-role]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const nextRole = btn.getAttribute("data-switch-role");
-        const nextState = await Storage.setActiveRole(nextRole);
-
-        if (nextRole === "employee") {
-          if (activePage === "dashboard") {
-            if (nextState.profile && Engine.isGateCleared(nextState)) {
-              window.location.href = "analyzer.html";
-            } else if (nextState.profile) {
-              window.location.href = "quiz.html";
-            } else {
-              window.location.href = "index.html";
-            }
-            return;
-          }
-        } else if (activePage !== "dashboard") {
-          window.location.href = "dashboard.html";
-          return;
+        </nav>`
         }
 
-        if (typeof onRoleChange === "function") {
-          onRoleChange(nextRole, nextState);
-        } else {
-          render({ activePage, state: nextState, onReset, onRoleChange });
+        <div class="nav-actions">
+          ${demoSwitcherHtml}
+          ${userBadgeHtml}
+          ${sessionUser?.forcePasswordChange ? "" : notifHtml}
+          ${themeToggleHtml}
+          ${changePwLink}
+          ${resetBtn}
+          ${logoutBtn}
+        </div>
+      </div>
+      ${defaultPwBannerHtml}
+    `;
+
+    // Demo-only role jump bindings
+    mount.querySelectorAll("[data-demo-switch-role]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const nextRole = btn.getAttribute("data-demo-switch-role");
+        try {
+          const res = await Storage.demoSwitchRole(nextRole);
+          if (typeof onRoleChange === "function" && nextRole !== "employee" && activePage === "dashboard") {
+            const freshState = await Storage.initState();
+            onRoleChange(nextRole, freshState);
+            return;
+          }
+          window.location.href = res.redirectTo || "index.html";
+        } catch (err) {
+          showToast(err?.message || "Demo switch failed", "warning");
         }
       });
     });
+
+    // Logout binding
+    const logoutTrigger = document.getElementById("nav-logout-btn");
+    if (logoutTrigger) {
+      logoutTrigger.addEventListener("click", async () => {
+        await Storage.logout();
+        window.location.href = "login.html";
+      });
+    }
 
     // Notification dropdown toggle
     const notifBtn = document.getElementById("nav-notif-btn");
@@ -540,6 +673,7 @@ window.SkillPathNav = (function () {
     consumeFlashToast,
     getSampleProfile,
     render,
+    requireLogin,
     requireDiagnosticComplete,
   };
 })();

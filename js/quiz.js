@@ -20,6 +20,11 @@
 
   const QUESTION_TIMER_SECONDS = 60;
 
+  const sess = await Nav.requireLogin();
+  if (!sess || !sess.authenticated || sess.redirectedTo) {
+    return;
+  }
+
   let appState = await Storage.initState();
 
   const queueEl = document.getElementById("quiz-skill-queue");

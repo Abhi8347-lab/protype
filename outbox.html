@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dev Simulated Outbox — SkillSync AI</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body data-page="outbox">
+    <header class="app-navbar">
+      <div class="navbar-inner">
+        <a href="login.html" class="brand-link">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+              <path d="M2 17l10 5 10-5"></path>
+              <path d="M2 12l10 5 10-5"></path>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <strong>SkillSync</strong>
+            <span class="brand-badge">Dev Outbox</span>
+          </span>
+        </a>
+        <div class="nav-actions">
+          <a href="/login.html" class="btn-secondary">← Back to Login</a>
+          <button type="button" class="icon-btn" id="outbox-theme-btn" aria-label="Toggle dark mode">🌙</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section class="page-header-row">
+        <div>
+          <div class="badge-cluster">
+            <div class="hero-badge">DEMO_MODE=1 · Simulated Email Outbox</div>
+          </div>
+          <h1>Local Email Outbox</h1>
+          <p class="page-lead">
+            When SMTP variables are not configured, onboarding and password-reset emails are saved here for demo inspection.
+          </p>
+        </div>
+        <div class="header-cta-group">
+          <button type="button" id="btn-refresh-outbox" class="btn-secondary">↻ Refresh</button>
+          <button type="button" id="btn-clear-outbox" class="btn-ghost-sm">Clear Outbox</button>
+        </div>
+      </section>
+
+      <section id="outbox-list" class="outbox-list"></section>
+    </main>
+
+    <script src="js/storage.js"></script>
+    <script>
+      (async function () {
+        const Storage = window.SkillPathStorage;
+        const themeBtn = document.getElementById("outbox-theme-btn");
+        function syncTheme() {
+          const t = Storage ? Storage.getTheme() : "light";
+          document.documentElement.setAttribute("data-theme", t);
+          if (themeBtn) themeBtn.textContent = t === "dark" ? "☀️" : "🌙";
+        }
+        syncTheme();
+        themeBtn?.addEventListener("click", () => {
+          Storage.setTheme(Storage.getTheme() === "dark" ? "light" : "dark");
+          syncTheme();
+        });
+
+        function esc(v) {
+          return String(v ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        const listEl = document.getElementById("outbox-list");
+        async function loadOutbox() {
+          const resp = await window.fetch("/api/dev/outbox", { credentials: "same-origin" });
+          if (!resp.ok) {
+            listEl.innerHTML = `<div class="card empty-state-card"><p>Outbox unavailable (DEMO_MODE=1 required).</p></div>`;
+            return;
+          }
+          const data = await resp.json();
+          const emails = data.emails || [];
+          if (emails.length === 0) {
+            listEl.innerHTML = `<div class="card empty-state-card"><h3>Outbox is empty</h3><p>Trigger "Forgot password?" or "Send login details by email" to inspect emails here.</p></div>`;
+            return;
+          }
+          listEl.innerHTML = emails
+            .map(
+              (mail) => `
+              <article class="card outbox-card">
+                <div class="outbox-card-top">
+                  <div>
+                    <span class="ai-mini-badge">${esc(mail.transport || "outbox")}</span>
+                    <h3>${esc(mail.subject)}</h3>
+                    <p class="card-sub">To: <strong>${esc(mail.to)}</strong> · ${esc(String(mail.createdAt || "").slice(0, 19).replace("T", " "))}</p>
+                  </div>
+                </div>
+                <pre class="outbox-body">${esc(mail.body)}</pre>
+              </article>
+            `
+            )
+            .join("");
+        }
+
+        document.getElementById("btn-refresh-outbox").addEventListener("click", loadOutbox);
+        document.getElementById("btn-clear-outbox").addEventListener("click", async () => {
+          await Storage.apiFetch("/api/dev/outbox/clear", { method: "POST" });
+          loadOutbox();
+        });
+
+        await loadOutbox();
+      })();
+    </script>
+  </body>
+</html>

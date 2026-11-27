@@ -10,6 +10,11 @@
 
   const TOTAL_STEPS = 4;
 
+  const sess = await Nav.requireLogin();
+  if (!sess || !sess.authenticated || sess.redirectedTo) {
+    return;
+  }
+
   let appState = await Storage.initState();
 
   function createDraftFromProfile(profile) {
@@ -18,7 +23,7 @@
     const rawType = profile?.userType ?? profile?.status;
     const userType = rawType === "other" ? "other" : "employee";
     return {
-      name: profile?.name || "",
+      name: profile?.name || sess.user?.name || "",
       isDemo: Boolean(profile?.isDemo),
       userType,
       previousField:

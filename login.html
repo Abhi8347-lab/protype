@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign In — SkillSync AI</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body data-page="login" class="auth-page">
+    <header class="app-navbar">
+      <div class="navbar-inner">
+        <a href="login.html" class="brand-link">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+              <path d="M2 17l10 5 10-5"></path>
+              <path d="M2 12l10 5 10-5"></path>
+            </svg>
+          </span>
+          <span class="brand-text">
+            <strong>SkillSync</strong>
+            <span class="brand-badge">AI Agent</span>
+          </span>
+        </a>
+        <div class="nav-actions">
+          <button
+            type="button"
+            class="icon-btn"
+            id="login-theme-btn"
+            aria-label="Toggle dark mode"
+            title="Toggle Light / Dark theme"
+          >🌙</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-shell auth-shell">
+      <section class="card auth-card" aria-label="SkillSync AI Login">
+        <div class="auth-card-header">
+          <div class="hero-badge">SkillSync AI · Secure Access</div>
+          <h1 id="auth-heading">Sign in to your account</h1>
+          <p class="card-sub" id="auth-subheading">
+            Enter your Employee, Manager, or HR ID and password to continue.
+          </p>
+        </div>
+
+        <div id="auth-timeout-banner" class="auth-info-banner" role="status" hidden>
+          You were signed out after 30 minutes of inactivity. Please sign in again.
+        </div>
+
+        <!-- Sign-In Form -->
+        <form id="login-form" novalidate>
+          <div class="form-group">
+            <label for="login-user-id" class="field-label">
+              User ID <span class="req">*</span>
+            </label>
+            <input
+              type="text"
+              id="login-user-id"
+              name="userId"
+              class="text-input"
+              placeholder="e.g., EMP-1001 or MGR-2001"
+              autocomplete="username"
+              maxlength="32"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="login-password" class="field-label">
+              Password <span class="req">*</span>
+            </label>
+            <div class="password-input-wrap">
+              <input
+                type="password"
+                id="login-password"
+                name="password"
+                class="text-input"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                maxlength="128"
+                required
+              />
+              <button
+                type="button"
+                id="toggle-login-password"
+                class="password-toggle-btn"
+                aria-label="Show password"
+                aria-pressed="false"
+              >Show</button>
+            </div>
+          </div>
+
+          <div id="login-error" class="form-error" role="alert" hidden></div>
+
+          <div class="auth-actions-row">
+            <button type="button" id="btn-open-forgot" class="btn-link-sm">
+              Forgot password?
+            </button>
+            <button type="submit" id="btn-login-submit" class="btn-primary">
+              Sign In →
+            </button>
+          </div>
+        </form>
+
+        <!-- Forgot Password Panel -->
+        <form id="forgot-form" hidden novalidate>
+          <div class="form-group">
+            <label for="forgot-email" class="field-label">
+              Registered Work Email <span class="req">*</span>
+            </label>
+            <input
+              type="email"
+              id="forgot-email"
+              name="email"
+              class="text-input"
+              placeholder="e.g., maya.lin@skillsync.demo"
+              autocomplete="email"
+              maxlength="120"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="forgot-user-id" class="field-label">
+              User ID <span class="optional-label">(Optional)</span>
+            </label>
+            <input
+              type="text"
+              id="forgot-user-id"
+              name="userId"
+              class="text-input"
+              placeholder="e.g., EMP-1001 or MGR-2001"
+              maxlength="32"
+            />
+          </div>
+
+          <div id="forgot-error" class="form-error" role="alert" hidden></div>
+          <div id="forgot-success" class="auth-success-banner" role="status" hidden></div>
+
+          <div class="auth-actions-row">
+            <button type="button" id="btn-back-to-login" class="btn-secondary">
+              ← Back to Sign In
+            </button>
+            <button type="submit" id="btn-forgot-submit" class="btn-primary">
+              Send Reset Password
+            </button>
+          </div>
+        </form>
+
+        <!-- Demo Logins Hint Box (Rendered ONLY when DEMO_MODE=1) -->
+        <aside id="demo-logins-box" class="demo-logins-box" aria-label="Demo logins" hidden>
+          <div class="demo-logins-header">
+            <span class="demo-pill">DEMO_MODE=1</span>
+            <strong>Demo Logins (Click to fill)</strong>
+            <a href="/dev/outbox" class="btn-link-xs" target="_blank" rel="noopener noreferrer">Open Dev Outbox ↗</a>
+          </div>
+          <div class="demo-logins-grid">
+            <button type="button" class="demo-cred-btn" data-demo-id="MGR-2001" data-demo-pw="Manager@123">
+              <strong>Manager</strong>
+              <span>MGR-2001 · Manager@123</span>
+            </button>
+            <button type="button" class="demo-cred-btn" data-demo-id="HR-3001" data-demo-pw="Hr@12345">
+              <strong>HR</strong>
+              <span>HR-3001 · Hr@12345</span>
+            </button>
+            <button type="button" class="demo-cred-btn" data-demo-id="EMP-1001" data-demo-pw="Employee@123">
+              <strong>Employee (Team)</strong>
+              <span>EMP-1001..1008 · Employee@123</span>
+            </button>
+            <button type="button" class="demo-cred-btn" data-demo-id="EMP-1009" data-demo-pw="1234">
+              <strong>New Joiner</strong>
+              <span>EMP-1009 · 1234</span>
+            </button>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="js/storage.js"></script>
+    <script src="js/login.js"></script>
+  </body>
+</html>
